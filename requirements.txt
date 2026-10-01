@@ -10,3 +10,4 @@ olefile>=0.47
 pypdf>=4.0
 discord.py>=2.4
 python-docx>=1.1
+winotify>=1.1.0

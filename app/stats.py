@@ -20,7 +20,7 @@ MINUTES = {
     "tool:list_calendar_events": 1, "tool:create_calendar_event": 1, "tool:find_free_time": 5,
     "tool:search_drive_files": 1, "tool:read_drive_file": 3,
     "tool:get_school_notices": 3, "tool:read_school_notice": 2, "tool:read_notice_attachment": 5,
-    "tool:find_events_in_emails": 5, "tool:find_events_in_notices": 10,
+    "tool:find_events_in_emails": 5, "tool:find_events_in_notices": 10, "tool:get_academic_calendar": 2,
     "notify:briefing": 10, "notify:weekly": 15, "notify:reminder": 2,
     "candidate_added": 2, "form_draft": 30, "form_rewrite": 2,
 }
@@ -36,6 +36,7 @@ TOOL_NAMES = {
     "search_drive_files": "드라이브 검색", "read_drive_file": "드라이브 읽기",
     "get_school_notices": "학교 공지 확인", "read_school_notice": "공지 본문 읽기", "read_notice_attachment": "공지 첨부 읽기",
     "find_events_in_emails": "메일에서 일정 찾기", "find_events_in_notices": "공지에서 일정 찾기",
+    "get_academic_calendar": "학사일정 확인",
     "remember": "기억하기", "forget": "기억 지우기", "add_todo": "할 일 추가", "list_todos": "할 일 보기",
     "complete_todo": "할 일 완료", "get_timetable": "시간표 보기", "draft_application": "신청서 초안",
 }

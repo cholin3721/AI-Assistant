@@ -58,6 +58,13 @@ a{color:var(--accent)}
 .tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .chip{font-size:12px;padding:2px 9px;border-radius:999px;background:var(--accent-weak);color:var(--accent);font-weight:600}
 .chip.fail{background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--bad)}
+.progress{list-style:none;margin:8px 0 0;padding:0;font-size:13px;color:var(--muted)}
+.progress li{position:relative;padding:2px 0 2px 16px}
+.progress li::before{content:"";position:absolute;left:0;top:9px;width:7px;height:7px;border-radius:50%;background:var(--muted);animation:b 1s infinite}
+.progress li.done::before{background:var(--ok);animation:none}
+.progress li.fail::before{background:var(--bad);animation:none}
+.progress li.st{font-style:italic}
+.live p{margin:.4em 0}
 .typing span{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);margin-right:4px;animation:b 1s infinite}
 .typing span:nth-child(2){animation-delay:.15s}.typing span:nth-child(3){animation-delay:.3s}
 @keyframes b{0%,80%,100%{opacity:.3}40%{opacity:1}}

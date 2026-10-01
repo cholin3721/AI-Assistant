@@ -110,11 +110,13 @@ def _busy_from_calendar(start: datetime, end: datetime) -> list:
 
 
 def free_slots(days_ahead: int, duration_minutes: int, earliest: str, latest: str,
-               include_weekends: bool, busy_calendar: list, classes: list, now: datetime) -> list:
+               include_weekends: bool, busy_calendar: list, classes: list, now: datetime,
+               extra_busy: list | None = None) -> list:
     dur = timedelta(minutes=max(15, int(duration_minutes)))
     eh, em = map(int, _hhmm(earliest).split(":"))
     lh, lm = map(int, _hhmm(latest).split(":"))
     slots = []
+    extra = extra_busy or []
     for off in range(0, int(days_ahead) + 1):
         day = (now + timedelta(days=off)).replace(hour=0, minute=0, second=0, microsecond=0)
         if not include_weekends and day.weekday() >= 5:
@@ -125,7 +127,8 @@ def free_slots(days_ahead: int, duration_minutes: int, earliest: str, latest: st
             w0 = max(w0, rounded)
         if w1 - w0 < dur:
             continue
-        busy = [(s, e) for s, e, _ in busy_calendar if s < w1 and e > w0]
+        busy = [(s, e) for s, e, *_ in busy_calendar if s < w1 and e > w0]
+        busy += [(s, e) for s, e in extra if s < w1 and e > w0]
         for c in classes:
             if c["day"] == day.weekday():
                 sh, sm = map(int, c["start"].split(":"))
@@ -159,10 +162,17 @@ def find_free_time(days_ahead: int = 7, duration_minutes: int = 60, earliest: st
         busy = _busy_from_calendar(now, end)
     except ToolError:
         busy = []
-    slots = free_slots(days_ahead, duration_minutes, earliest, latest, include_weekends, busy, get(), now)
+    try:
+        from .tools.academic import busy_ranges
+        extra = [(s, e) for s, e, _ in busy_ranges(now, end)]
+    except Exception:
+        extra = []
+    slots = free_slots(days_ahead, duration_minutes, earliest, latest, include_weekends,
+                       busy, get(), now, extra_busy=extra)
     fmt = lambda s, e: f"{s.month}/{s.day}({DAYS[s.weekday()]}) {s:%H:%M}~{e:%H:%M} ({int((e - s).total_seconds() // 60)}분)"
     return {
-        "used": {"calendar": google_auth.get_credentials() is not None, "timetable_classes": len(get())},
+    "used": {"calendar": google_auth.get_credentials() is not None, "timetable_classes": len(get()),
+             "academic_busy": len(extra)},
         "free_slots": [fmt(s, e) for s, e in slots[:20]],
         "note": "" if get() else "시간표가 등록되지 않아 수업 시간은 고려하지 못했어요. 설정 > 시간표에서 등록할 수 있어요.",
     }

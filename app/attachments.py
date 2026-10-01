@@ -117,9 +117,46 @@ def pdf_text(data: bytes) -> str:
     return _clean("\n".join((page.extract_text() or "") for page in reader.pages[:30]))
 
 
-def extract_text(data: bytes, filename: str = "", max_chars: int = MAX_CHARS) -> dict:
-    """파일 내용(바이트)을 보고 형식을 판별해 텍스트를 추출. 파일 이름보다 실제 내용을 우선."""
+def ocr_with_gemini(data: bytes, mime: str) -> str:
+    """스캔 PDF·이미지 글자 추출. API 키가 없거나 실패하면 빈 문자열."""
+    from . import config
+    cfg = config.load()
+    if not cfg.get("gemini_api_key") or len(data) > 15_000_000:
+        return ""
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=cfg["gemini_api_key"])
+        resp = client.models.generate_content(
+            model=cfg.get("model") or "gemini-3.8-flash",
+            contents=[types.Part.from_bytes(data=data, mime_type=mime),
+                      "이 스캔 문서/이미지의 글자를 모두 뽑아줘. 표는 왼쪽→오른쪽, 위→아래 칸 순서로. "
+                      "레이아웃은 유지하고, 장식이 아닌 실제 글자만."],
+            config=types.GenerateContentConfig(temperature=0.1),
+        )
+        return _clean(resp.text or "")
+    except Exception:
+        return ""
+
+
+def _image_mime(data: bytes, filename: str) -> str:
     name = filename.lower()
+    if data[:8] == b"\x89PNG\r\n\x1a\n" or name.endswith(".png"):
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff" or name.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP" or name.endswith(".webp"):
+        return "image/webp"
+    if name.endswith(".gif"):
+        return "image/gif"
+    return ""
+
+
+def extract_text(data: bytes, filename: str = "", max_chars: int = MAX_CHARS) -> dict:
+    """파일 내용(바이트)을 보고 형식을 판별해 텍스트를 추출. 파일 이름보다 실제 내용을 우선.
+    스캔 PDF·이미지는 Gemini Vision으로 글자를 읽습니다."""
+    name = filename.lower()
+    ocr = False
     try:
         if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
             kind, text = "hwp", hwp_text(data)
@@ -127,13 +164,23 @@ def extract_text(data: bytes, filename: str = "", max_chars: int = MAX_CHARS) ->
             kind, text = zip_text(data)
         elif data[:5] == b"%PDF-":
             kind, text = "pdf", pdf_text(data)
+            if not text:
+                text = ocr_with_gemini(data, "application/pdf")
+                ocr = bool(text)
+                kind = "pdf-ocr" if ocr else kind
         elif name.endswith((".txt", ".csv", ".md")):
             kind, text = "text", _clean(data.decode("utf-8", errors="replace"))
         else:
-            return {"kind": "unknown", "text": "", "error": "읽을 수 없는 형식이에요 (한글·PDF·워드·텍스트만 가능)."}
+            mime = _image_mime(data, filename)
+            if mime:
+                text = ocr_with_gemini(data, mime)
+                kind, ocr = "image-ocr", bool(text)
+            else:
+                return {"kind": "unknown", "text": "", "error": "읽을 수 없는 형식이에요 (한글·PDF·워드·텍스트·이미지만 가능)."}
     except Exception as e:
         return {"kind": "error", "text": "", "error": f"파일을 읽지 못했어요: {e}"}
     if not text:
-        return {"kind": kind, "text": "", "error": "글자를 찾지 못했어요 (스캔 이미지로 된 문서일 수 있어요)."}
+        return {"kind": kind, "text": "", "error": "글자를 찾지 못했어요 (암호가 걸려 있거나 빈 문서일 수 있어요)."}
     cut = len(text) > max_chars
-    return {"kind": kind, "text": text[:max_chars] + ("\n…(이하 생략)" if cut else ""), "truncated": cut}
+    return {"kind": kind, "text": text[:max_chars] + ("\n…(이하 생략)" if cut else ""),
+            "truncated": cut, "ocr": ocr}

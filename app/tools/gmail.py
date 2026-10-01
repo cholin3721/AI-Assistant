@@ -3,7 +3,7 @@ import re
 from email.mime.text import MIMEText
 from email.utils import parseaddr
 
-from . import tool, google_service, ToolError
+from . import tool, google_service, ToolError, batch_execute
 
 
 def _header(headers, name):
@@ -46,14 +46,17 @@ def search_emails(query: str = "is:unread", max_results: int = 10) -> dict:
     svc = google_service("gmail", "v1")
     max_results = max(1, min(int(max_results), 25))
     res = svc.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+    ids = [m["id"] for m in res.get("messages", [])]
+    # 메타데이터를 한 번의 batch 요청으로 (N+1 → 2회 왕복)
+    msgs = batch_execute(svc, [svc.users().messages().get(userId="me", id=i, format="metadata",
+                                                           metadataHeaders=["From", "Subject", "Date"]) for i in ids])
     items = []
-    for m in res.get("messages", []):
-        msg = svc.users().messages().get(
-            userId="me", id=m["id"], format="metadata",
-            metadataHeaders=["From", "Subject", "Date"]).execute()
+    for mid, msg in zip(ids, msgs):
+        if msg is None:
+            continue
         h = msg.get("payload", {}).get("headers", [])
         items.append({
-            "id": m["id"],
+            "id": mid,
             "from": _header(h, "From"),
             "subject": _header(h, "Subject"),
             "date": _header(h, "Date"),

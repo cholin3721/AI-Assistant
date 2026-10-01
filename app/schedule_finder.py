@@ -23,7 +23,8 @@ STORE_PATH = config.DATA_DIR / "schedule.json"
 BATCH = 8                 # Gemini 한 번에 넘길 메일 수
 
 _lock = threading.Lock()       # 저장소 접근
-_scan_lock = threading.Lock()  # 동시에 두 번 스캔 방지
+_mail_lock = threading.Lock()  # 메일 스캔 (공지 스캔과 동시에 가능)
+_notice_lock = threading.Lock()
 
 
 class ScanError(Exception):
@@ -124,13 +125,30 @@ def _is_duplicate(ev: dict, existing: list) -> bool:
 
 
 # ---------- 외부 호출 (테스트에서 바꿔 끼울 수 있게 함수로 분리) ----------
-def _fetch_emails(days: int, limit: int) -> tuple:
-    from .tools.gmail import read_email, search_emails
+def _fetch_emails(days: int, limit: int) -> list:
+    from .tools.gmail import search_emails
     q = f"newer_than:{int(days)}d -category:promotions -category:social -in:sent -in:drafts"
     res = search_emails(query=q, max_results=limit)
     if "error" in res:
         raise ScanError(res["error"])
-    return res["emails"], read_email
+    return res["emails"]
+
+
+def _read_bodies(ids: list) -> dict:
+    """메일 본문을 Gmail batch로 한 번에 읽기. {id: body}"""
+    from .tools import batch_execute, google_service
+    from .tools.gmail import _decode_body
+    if not ids:
+        return {}
+    svc = google_service("gmail", "v1")
+    msgs = batch_execute(svc, [svc.users().messages().get(userId="me", id=i, format="full") for i in ids])
+    out = {}
+    for i, msg in zip(ids, msgs):
+        if msg is None:
+            continue
+        body = re.sub(r"\n{3,}", "\n\n", _decode_body(msg.get("payload", {}))).strip()
+        out[i] = body
+    return out
 
 
 def _existing_events() -> list:
@@ -225,18 +243,19 @@ def scan(days: int = 7, force: bool = False, limit: int = 25) -> dict:
         raise ScanError("먼저 Gemini API 키를 설정해주세요.")
     if google_auth.get_credentials() is None:
         raise ScanError("구글 계정이 연동되지 않았어요. 설정에서 구글 연동을 먼저 해주세요.")
-    if not _scan_lock.acquire(blocking=False):
-        raise ScanError("이미 확인하는 중이에요. 잠시만 기다려주세요.")
+    if not _mail_lock.acquire(blocking=False):
+        raise ScanError("이미 메일을 확인하는 중이에요. 잠시만 기다려주세요.")
     try:
         data = _load()
-        listed, read_email = _fetch_emails(days, limit)
+        listed = _fetch_emails(days, limit)
         targets = [m for m in listed if force or m["id"] not in data["processed"]]
         if not targets:
             return {"checked": 0, "found": 0, "new": [], "message": "새로 확인할 메일이 없어요."}
+        bodies = _read_bodies([m["id"] for m in targets])
         emails = []
         for m in targets:
-            full = read_email(message_id=m["id"])
-            if "error" in full:
+            body = bodies.get(m["id"])
+            if body is None:
                 continue
             try:
                 rd = parsedate_to_datetime(m["date"]).astimezone(KST)
@@ -244,7 +263,7 @@ def scan(days: int = 7, force: bool = False, limit: int = 25) -> dict:
             except Exception:
                 received = m["date"]
             emails.append({"id": m["id"], "from": m["from"], "subject": m["subject"],
-                           "received": received, "body": full.get("body", "")})
+                           "received": received, "body": body})
         meta = {e["id"]: {"key": e["id"], "source": "mail", "from": e["from"], "subject": e["subject"],
                           "link": f"https://mail.google.com/mail/u/0/#all/{e['id']}", "link_text": "메일 보기"}
                 for e in emails}
@@ -257,7 +276,7 @@ def scan(days: int = 7, force: bool = False, limit: int = 25) -> dict:
             f"메일 {len(emails)}통을 확인했지만 새 일정은 없었어요."
         return {"checked": len(emails), "found": len(new), "new": new, "message": msg}
     finally:
-        _scan_lock.release()
+        _mail_lock.release()
 
 
 # ---------- 학교 공지 스캔 ----------
@@ -294,6 +313,23 @@ def _fetch_notices(days: int) -> list:
     return res["notices"]
 
 
+def _keyword_alerts(notices: list):
+    """설정한 키워드가 새 공지 제목에 있으면 바로 알림."""
+    kws = [k.strip() for k in (config.load().get("notice_keywords") or []) if str(k).strip()]
+    if not kws:
+        return
+    hits = []
+    for n in notices:
+        matched = [k for k in kws if k.lower() in n["title"].lower()]
+        if matched:
+            hits.append((n, matched))
+    if not hits:
+        return
+    from . import notify
+    lines = [f"- [{n['title']}]({n['url']}) · {n['board']} · {', '.join(m)}" for n, m in hits[:12]]
+    notify.add("notice", f"관심 공지 {len(hits)}건", "\n".join(lines))
+
+
 def _read_notice(url: str) -> dict:
     from .tools.notices import read_notice_attachment, read_school_notice
     view = read_school_notice(url=url)
@@ -311,14 +347,15 @@ def scan_notices(days: int = 7, force: bool = False) -> dict:
     """최근 학교 공지 중 나에게 맞는 것을 골라 마감일·행사 일정을 후보로 만듦."""
     if not config.load().get("gemini_api_key"):
         raise ScanError("먼저 Gemini API 키를 설정해주세요.")
-    if not _scan_lock.acquire(blocking=False):
-        raise ScanError("이미 확인하는 중이에요. 잠시만 기다려주세요.")
+    if not _notice_lock.acquire(blocking=False):
+        raise ScanError("이미 공지를 확인하는 중이에요. 잠시만 기다려주세요.")
     try:
         data = _load()
         done = data.setdefault("processed_notices", {})
         notices = [n for n in _fetch_notices(days) if force or n["url"] not in done]
         if not notices:
             return {"checked": 0, "found": 0, "new": [], "message": "새로 올라온 공지가 없어요."}
+        _keyword_alerts(notices)
         picked = _pick_relevant(notices)
         docs, meta = [], {}
         for i, n in enumerate(picked):
@@ -341,7 +378,7 @@ def scan_notices(days: int = 7, force: bool = False) -> dict:
                if new else f"새 공지 {len(notices)}개를 확인했지만 챙길 일정은 없었어요.")
         return {"checked": len(notices), "read": len(picked), "found": len(new), "new": new, "message": msg}
     finally:
-        _scan_lock.release()
+        _notice_lock.release()
 
 
 # ---------- 사용자 결정 ----------
@@ -390,4 +427,4 @@ def ignore(cid: str) -> dict:
 
 
 def is_running() -> bool:
-    return _scan_lock.locked()
+    return _mail_lock.locked() or _notice_lock.locked()

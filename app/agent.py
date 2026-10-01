@@ -11,7 +11,8 @@ from .followups import find_awaiting_replies, find_unanswered_emails
 from .memory import forget, remember
 from .timetable import find_free_time, get_timetable
 from .todos import add_todo, complete_todo, list_todos
-from .tools import get_log, start_log
+from .tools import emit, get_log, start_log
+from .tools.academic import get_academic_calendar
 from .tools.drive import read_drive_file, search_drive_files
 from .tools.gcalendar import create_calendar_event, list_calendar_events
 from .tools.gmail import create_email_draft, read_email, read_email_attachment, search_emails
@@ -25,8 +26,8 @@ PREFERRED_MODELS = [
     "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.5-flash-lite",
 ]
 LOCAL_TOOLS = [get_school_notices, read_school_notice, read_notice_attachment, find_events_in_notices,
-               remember, forget, add_todo, list_todos, complete_todo, get_timetable, find_free_time,
-               draft_application]
+               get_academic_calendar, remember, forget, add_todo, list_todos, complete_todo,
+               get_timetable, find_free_time, draft_application]
 GOOGLE_TOOLS = [search_emails, read_email, read_email_attachment, create_email_draft,
                 find_unanswered_emails, find_awaiting_replies,
                 list_calendar_events, create_calendar_event, find_events_in_emails,
@@ -102,6 +103,11 @@ def _system_prompt() -> str:
     profile = "\n".join(x for x in profile_lines if x) or "- (아직 입력 안 함)"
     open_todos = todos.items()
     todo_line = ", ".join(f"{t['title']}" + (f"(~{t['due'][5:]})" if t.get("due") else "") for t in open_todos[:8]) or "없음"
+    try:
+        from .tools.academic import prompt_block as academic_prompt
+        academic_block = academic_prompt(21)
+    except Exception:
+        academic_block = "- (학사일정을 아직 못 가져왔어요)"
     return f"""너는 인하공업전문대학 학생을 돕는 개인 AI 비서야. 친절하지만 군더더기 없이, 실제로 일을 처리해주는 비서처럼 행동해.
 현재 시각: {now:%Y-%m-%d %H:%M} ({weekday}요일, 한국 시간)
 
@@ -113,6 +119,9 @@ def _system_prompt() -> str:
 
 [수업]
 {timetable.today_block()}
+
+[학사일정 (앞으로 3주)]
+{academic_block}
 
 [남은 할 일 {len(open_todos)}개]
 {todo_line}
@@ -135,7 +144,8 @@ def _system_prompt() -> str:
    그리고 할 일에 넣을지 물어보고, 원하면 add_todo로 단계마다 마감일과 공지 링크를 넣어.
 7. 사용자가 사람·연락처·지도교수·팀원·선호 등 다음에도 쓸 정보를 알려주거나 "기억해"라고 하면 remember로 저장해. 비밀번호·계좌 같은 민감정보는 저장하지 마.
    "민수한테 메일 써줘"처럼 사람이 나오면 [기억하고 있는 것]에서 연락처를 먼저 찾고, 없으면 메일 검색으로 찾아.
-8. "언제 시간 돼?", "회의 잡을 시간" 같은 질문은 find_free_time으로 캘린더+시간표의 빈 시간을 찾아 2~4개 추천해.
+8. "언제 시간 돼?", "회의 잡을 시간" 같은 질문은 find_free_time으로 캘린더+시간표+학사일정(시험·연휴)의 빈 시간을 찾아 2~4개 추천해.
+   수강신청·중간고사·등록금처럼 학사 일정 질문에는 get_academic_calendar를 써.
 9. 답장할 메일·회신 대기 메일은 find_unanswered_emails / find_awaiting_replies로 찾고, 원하면 초안까지 만들어.
 10. 신청서·보고서·참가신청서를 써달라고 하면 공지의 양식 첨부를 찾아 draft_application으로 초안을 만들고,
    직접 채워야 할 항목(학번·연락처 등)을 알려준 뒤 화면 왼쪽 '신청서 도우미'에서 고치고 저장하라고 안내해.
@@ -174,31 +184,91 @@ def _new_session(cfg: dict, model: str) -> dict:
             "lock": threading.Lock(), "chat": client.chats.create(model=model, config=_config())}
 
 
-def chat(session_id: str, message: str) -> dict:
+def _history_text(chat_obj, limit: int = 6000) -> str:
+    try:
+        hist = chat_obj.get_history()
+    except Exception:
+        return ""
+    parts = []
+    for c in hist:
+        role = getattr(c, "role", "user") or "user"
+        text = getattr(c, "text", None) or ""
+        if not text:
+            try:
+                text = "".join(getattr(p, "text", "") or "" for p in (getattr(c, "parts", None) or []))
+            except Exception:
+                text = ""
+        if text.strip():
+            parts.append(f"{role}: {text.strip()[:400]}")
+    return "\n".join(parts)[-limit:]
+
+
+def _summarize(sess) -> str:
+    blob = _history_text(sess.get("chat"))
+    if not blob:
+        return ""
+    try:
+        resp = sess["client"].models.generate_content(
+            model=sess["model"],
+            contents="다음 대화를 5줄 이내로 요약해. 이름·결정·할 일·날짜만.\n\n" + blob,
+            config=types.GenerateContentConfig(temperature=0.2),
+        )
+        return (resp.text or "").strip()[:1500]
+    except Exception:
+        return ""
+
+
+def _collect_stream(chat_obj, message: str, on_event) -> str:
+    text = ""
+    if on_event and hasattr(chat_obj, "send_message_stream"):
+        for chunk in chat_obj.send_message_stream(message, config=_config()):
+            piece = getattr(chunk, "text", None) or ""
+            if piece:
+                text += piece
+                on_event({"type": "delta", "text": piece})
+        return text
+    resp = chat_obj.send_message(message, config=_config())
+    return resp.text or ""
+
+
+def chat(session_id: str, message: str, on_event=None) -> dict:
     cfg = config.load()
     if not cfg.get("gemini_api_key"):
         raise AgentError("먼저 설정에서 Gemini API 키를 입력해주세요.")
     model = cfg.get("model") or PREFERRED_MODELS[0]
+    carried = ""
     with _lock:
         sess = _sessions.get(session_id)
-        if (sess is None or sess["key"] != cfg["gemini_api_key"] or sess["model"] != model
-                or sess["turns"] >= MAX_TURNS):
+        stale = (sess is None or sess["key"] != cfg["gemini_api_key"] or sess["model"] != model
+                 or sess["turns"] >= MAX_TURNS)
+        if stale:
+            if sess is not None and sess["turns"] >= MAX_TURNS:
+                carried = _summarize(sess)
             sess = _new_session(cfg, model)
             _sessions[session_id] = sess
     with sess["lock"]:
-        start_log()
+        start_log(on_event)
+        emit({"type": "status", "text": "생각 중…"})
+        outgoing = message
+        if carried:
+            outgoing = f"[이전 대화 요약]\n{carried}\n\n[이어서]\n{message}"
+            emit({"type": "status", "text": "대화가 길어져 요약을 남기고 새로 시작해요"})
         try:
-            resp = sess["chat"].send_message(message, config=_config())
+            text = _collect_stream(sess["chat"], outgoing, on_event)
         except Exception as e:
             raise AgentError(friendly_error(e))
         sess["turns"] += 1
-    from . import stats
+    from . import chats, stats
     channel = "task" if session_id.startswith("task-") else session_id if session_id in ("discord", "telegram") else "web"
     stats.record(f"chat:{channel}")
-    text = resp.text or ""
-    if not text.strip():
+    if not (text or "").strip():
         text = "응답을 만들지 못했어요. 질문을 조금 바꿔서 다시 해볼래요?"
-    return {"reply": text, "tools": get_log(), "model": model}
+    if carried:
+        text = "_대화가 길어져 요약을 남기고 새로 시작했어요._\n\n" + text
+    tools = get_log()
+    chats.append(session_id, "user", message)
+    chats.append(session_id, "bot", text, tools)
+    return {"reply": text, "tools": tools, "model": model, "reset": bool(carried)}
 
 
 def run_task(prompt: str) -> str:

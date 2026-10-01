@@ -22,12 +22,13 @@ DEFAULT = {"last_mail_scan": 0, "last_notice_scan": 0, "last_reminder": 0,
 
 BRIEF_PROMPT = """아침 브리핑을 만들어줘. 도구로 실제 데이터를 확인해서 아래 순서로 정리해.
 1. 오늘 일정과 수업 (캘린더 + 시간표)
-2. 안 읽은 메일 중 중요한 것 (최근 2일)
-3. 답장해야 하는 메일, 답을 기다리는 메일 (있을 때만)
-4. 3일 안에 다가오는 마감 (캘린더 마감 + 할 일)
-5. 최근 2일 새 학교 공지 중 나에게 맞는 것
+2. 다가오는 학사일정 (수강신청·시험·등록금 등, get_academic_calendar)
+3. 안 읽은 메일 중 중요한 것 (최근 2일)
+4. 답장해야 하는 메일, 답을 기다리는 메일 (있을 때만)
+5. 3일 안에 다가오는 마감 (캘린더 마감 + 할 일)
+6. 최근 2일 새 학교 공지 중 나에게 맞는 것
 맨 앞에 짧은 인사 한 줄. 항목마다 2~4줄, 해당 내용이 없으면 그 항목은 생략. 링크는 [제목](URL)로.
-구글이 연동되지 않았으면 1~4는 건너뛰고 학교 공지와 할 일만 정리해."""
+구글이 연동되지 않았으면 메일·캘린더 항목은 건너뛰고 학사일정·학교 공지·할 일만 정리해."""
 
 WEEKLY_PROMPT = """이번 주 회고를 만들어줘. 도구로 실제 데이터를 확인해서:
 1. 이번 주에 있었던 일정 (지난 7일 캘린더)
@@ -71,7 +72,7 @@ def _ready() -> bool:
 
 
 # ---------- 작업들 ----------
-def run_briefing(manual: bool = False, now: datetime | None = None) -> str:
+def run_briefing(manual: bool = False, now: datetime | None = None, slot: str = "") -> str:
     from . import agent
     now = now or datetime.now(KST)
     if not _ready():
@@ -85,12 +86,12 @@ def run_briefing(manual: bool = False, now: datetime | None = None) -> str:
         return str(e)
     notify.add("briefing", f"{now.month}월 {now.day}일 ({DAYS[now.weekday()]}) 아침 브리핑", text)
     if not manual:
-        _set(last_briefing=now.strftime("%Y-%m-%d"))
+        _set(last_briefing=slot or now.strftime("%Y-%m-%d"))
     _result("briefing", "보냄")
     return text
 
 
-def run_weekly(manual: bool = False, now: datetime | None = None) -> str:
+def run_weekly(manual: bool = False, now: datetime | None = None, slot: str = "") -> str:
     from . import agent
     now = now or datetime.now(KST)
     if not _ready():
@@ -103,7 +104,7 @@ def run_weekly(manual: bool = False, now: datetime | None = None) -> str:
     notify.add("weekly", f"{now.month}월 {now.day}일 주간 회고", text)
     if not manual:
         y, w, _ = now.isocalendar()
-        _set(last_weekly=f"{y}-W{w}")
+        _set(last_weekly=slot or f"{y}-W{w}")
     _result("weekly", "보냄")
     return text
 
@@ -123,6 +124,13 @@ def _deadline_items(now: datetime) -> list:
     for t in todos.items():
         if t.get("due") and t["due"] <= limit:
             out.append((t["due"], t["title"], "할 일", t.get("link", "")))
+    try:
+        from .tools.academic import upcoming
+        for e in upcoming(3):
+            if any(w in e["title"] for w in ("마감", "신청", "등록", "제출", "평가", "시험")):
+                out.append((e["end"], e["title"], "학사일정", e.get("url", "")))
+    except Exception:
+        pass
     return out
 
 
@@ -194,19 +202,28 @@ def _scan_notices():
 
 
 # ---------- 시계 ----------
-def due_daily(now: datetime, hhmm: str, last: str) -> bool:
+def due_daily(now: datetime, hhmm: str, last: str):
+    """(보낼지, 슬롯id). 시각을 놓쳤어도 10시간 안이면 한 번 보냄. 자정을 넘어도 됨."""
     h, m = _hm(hhmm)
+    window = timedelta(hours=10)
     at = now.replace(hour=h, minute=m, second=0, microsecond=0)
-    return last != now.strftime("%Y-%m-%d") and at <= now < at + timedelta(hours=10)
+    for sched in (at, at - timedelta(days=1)):
+        slot = f"{sched:%Y-%m-%d} {h:02d}:{m:02d}"
+        if last not in (slot, slot[:10]) and sched <= now < sched + window:
+            return True, slot
+    return False, ""
 
 
-def due_weekly(now: datetime, weekday: int, hhmm: str, last: str) -> bool:
-    if now.weekday() != int(weekday):
-        return False
+def due_weekly(now: datetime, weekday: int, hhmm: str, last: str):
     h, m = _hm(hhmm)
-    at = now.replace(hour=h, minute=m, second=0, microsecond=0)
-    y, w, _ = now.isocalendar()
-    return last != f"{y}-W{w}" and at <= now < at + timedelta(hours=10)
+    window = timedelta(hours=10)
+    this = now.replace(hour=h, minute=m, second=0, microsecond=0) - timedelta(days=(now.weekday() - int(weekday)) % 7)
+    for sched in (this, this - timedelta(days=7)):
+        y, w, _ = sched.isocalendar()
+        slot = f"{y}-W{w}"
+        if last != slot and sched <= now < sched + window:
+            return True, slot
+    return False, ""
 
 
 def tick(now: datetime | None = None):
@@ -219,11 +236,13 @@ def tick(now: datetime | None = None):
     google_on = google_auth.get_credentials() is not None
     t = time.time()
 
-    if auto.get("briefing") and due_daily(now, auto.get("briefing_time", "08:00"), st.get("last_briefing", "")):
-        run_briefing(now=now)
-    if auto.get("weekly") and due_weekly(now, auto.get("weekly_day", 4), auto.get("weekly_time", "18:00"),
-                                         st.get("last_weekly", "")):
-        run_weekly(now=now)
+    brief_ok, brief_slot = due_daily(now, auto.get("briefing_time", "08:00"), st.get("last_briefing", ""))
+    if auto.get("briefing") and brief_ok:
+        run_briefing(now=now, slot=brief_slot)
+    week_ok, week_slot = due_weekly(now, auto.get("weekly_day", 4), auto.get("weekly_time", "18:00"),
+                                    st.get("last_weekly", ""))
+    if auto.get("weekly") and week_ok:
+        run_weekly(now=now, slot=week_slot)
     if auto.get("reminders") and t - st.get("last_reminder", 0) >= REMIND_EVERY:
         _set(last_reminder=t)
         run_reminders(now)

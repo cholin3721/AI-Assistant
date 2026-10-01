@@ -42,6 +42,7 @@
       <button class="quick" data-q="안 읽은 메일을 중요한 것 위주로 요약해줘.">안 읽은 메일 요약</button>
       <button class="quick" data-q="내가 답장 안 한 메일이랑, 내가 보냈는데 답이 없는 메일을 찾아줘. 필요하면 초안도 제안해줘.">답장 챙기기</button>
       <button class="quick" data-q="이번 주에 1시간짜리 팀 회의를 잡을 수 있는 빈 시간을 찾아줘.">이번 주 빈 시간</button>
+      <button class="quick" data-q="이번 학기 학사일정에서 수강신청·시험·등록금처럼 내가 챙겨야 할 날짜를 알려줘.">학사일정 챙기기</button>
       <button class="quick" data-q="내 학과·학년·관심사에 맞는 학교 공지(공모전, 장학, 비교과, 특강)를 찾아서 마감일과 혜택을 함께 알려줘.">나에게 맞는 공지</button>
       <button class="quick" data-q="최근 일주일 메일과 학교 공지에서 챙겨야 할 일정(회의, 발표, 마감일)을 찾아줘.">메일·공지에서 일정 찾기</button>
     </section>
@@ -89,7 +90,7 @@
       <!-- 0. 시작 -->
       <section class="page" data-page="0">
         <h2>안녕하세요! 3단계면 내 AI 비서가 준비돼요</h2>
-        <p class="lead">메일, 일정, 드라이브, 학교 공지를 한곳에서 물어보고 정리받을 수 있어요.</p>
+        <p class="lead">메일, 일정, 드라이브, 학교 공지를 한곳에서 물어보고 정리받을 수 있어요. <b>구글 연동 없이도</b> 학교 공지·학사일정·할 일·시간표·신청서 도우미는 바로 됩니다.</p>
         <ul class="feat">
           <li><b>메일</b> 안 읽은 메일 요약, 답장 초안 작성 (자동 발송은 절대 안 해요)</li>
           <li><b>일정</b> 이번 주 일정 정리, 말로 일정 등록</li>
@@ -141,7 +142,7 @@
       <!-- 3. 구글 연동 -->
       <section class="page" data-page="3">
         <h2>Gmail · 캘린더 · 드라이브 연결 <span class="time">약 5분 · 처음 한 번만</span></h2>
-        <p class="lead">나만 쓰는 '구글 연결 통로'를 만드는 과정이에요. 순서대로 따라 하고 각 단계의 체크를 눌러주세요. <b>개인 Gmail 계정</b>을 추천해요.</p>
+        <p class="lead">나만 쓰는 '구글 연결 통로'를 만드는 과정이에요. <b>건너뛰어도</b> 학교 공지·학사일정·신청서 도우미는 쓸 수 있어요. 순서대로 따라 하고 각 단계의 체크를 눌러주세요. <b>개인 Gmail 계정</b>을 추천해요.</p>
         <ol class="howto check" id="g-steps">
           <li><input type="checkbox"><div><b>프로젝트 만들기</b> — 이름은 <code>AI-Assistant</code>처럼 아무거나 넣고 「만들기」.
             <a class="btn-link" href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">프로젝트 만들기 열기 ↗</a></div></li>
@@ -165,7 +166,8 @@
             <li><b>“액세스 차단됨: 앱이 테스트 중”</b> → 4번(테스트 사용자 추가)에서 로그인한 계정과 같은 주소를 넣었는지 확인하세요.</li>
             <li><b>“웹 애플리케이션 유형”</b> 오류 → 5번에서 유형을 <b>데스크톱 앱</b>으로 다시 만들어주세요.</li>
             <li><b>“API has not been used / disabled”</b> → 2번 API 켜기를 같은 프로젝트에서 했는지 확인하세요.</li>
-            <li>테스트 모드 앱은 <b>7일마다 로그인이 만료</b>돼요. 그때는 설정에서 「구글 로그인」만 다시 누르면 돼요.</li>
+            <li>테스트 모드 앱은 <b>7일마다 로그인이 만료</b>돼요. 그때는 설정에서 「구글 로그인」만 다시 누르면 돼요.
+              구글 클라우드에서 앱을 <b>프로덕션(게시)</b>으로 바꾸면 7일 만료가 사라집니다. (미검증 경고 화면은 한 번 더 뜹니다)</li>
           </ul>
         </details>
       </section>
@@ -245,7 +247,13 @@
         <div class="auto-row"><label class="check"><input type="checkbox" id="s-auto-scan"> 메일에서 일정 자동 찾기 <span class="muted">(30분마다)</span></label></div>
         <div class="auto-row"><label class="check"><input type="checkbox" data-auto="notice_scan"> 학교 공지에서 일정 자동 찾기 <span class="muted">(6시간마다)</span></label>
           <span class="spacer"></span><button class="ghost sm" data-run="notice_scan">지금 확인</button></div>
+        <div class="auto-row"><label class="check"><input type="checkbox" data-auto="desktop_toast"> 윈도우 알림(토스트) <span class="muted">화면을 닫아도 작업표시줄에 띄워요</span></label></div>
+        <div class="auto-row"><label class="check"><input type="checkbox" data-auto="team_share"> 팀 채널에도 마감·일정 후보 공유</label></div>
         <div class="result" id="auto-result"></div>
+        <h4>관심 공지 키워드</h4>
+        <p class="muted">새 공지 제목에 이 단어가 있으면 바로 알려줘요. 쉼표로 여러 개.</p>
+        <div class="keyrow"><input id="kw-input" placeholder="예: 장학, AI, 공모전" maxlength="40"><button class="sm" id="kw-add" type="button">추가</button></div>
+        <ul class="plain-list" id="kw-list"></ul>
         <h4>브라우저 알림</h4>
         <p class="muted">이 화면이 열려 있으면 윈도우 알림으로도 띄워줘요.</p>
         <button class="ghost sm" id="btn-browser-notif">브라우저 알림 켜기</button>
@@ -281,6 +289,11 @@
           <p class="ok-text" id="dc-done-text"></p>
           <p class="muted">DM에서 그냥 말 걸면 돼요. <code>브리핑</code> 지금 브리핑, <code>할 일</code> 할 일 보기, <code>도움말</code>. 주인으로 등록된 계정 외에는 응답하지 않아요.</p>
           <div class="row"><button class="sm" id="dc-test">테스트 메시지 보내기</button><button class="ghost sm danger" id="dc-off">연결 해제</button></div>
+          <div id="dc-team">
+            <h4>팀 채널 (보내기 전용)</h4>
+            <p class="muted" id="dc-team-now"></p>
+            <div class="keyrow"><select id="dc-team-sel"></select><button class="sm" id="dc-team-save" type="button">저장</button></div>
+          </div>
         </div>
         <div class="result" id="dc-result"></div>
         <hr class="sep">

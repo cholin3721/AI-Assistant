@@ -1,18 +1,53 @@
-"""AI가 호출할 수 있는 도구 모음. 호출 기록을 남겨 화면에 '무엇을 했는지' 보여줍니다."""
+"""AI가 호출할 수 있는 도구 모음. 호출 기록을 남겨 화면에 '무엇을 했는지' 보여주고,
+진행 상황을 실시간(SSE)으로 흘려보낼 수 있게 콜백을 둡니다."""
 import contextvars
 import functools
+import threading
+import time
 
 _call_log: contextvars.ContextVar = contextvars.ContextVar("call_log", default=None)
+_progress: contextvars.ContextVar = contextvars.ContextVar("progress", default=None)
+_tls = threading.local()
 
 LABELS = {}
 
+# 진행 표시에 붙일 인자 설명 (사람이 읽기 좋은 짧은 문구만)
+_ARG_HINTS = {
+    "category": "{}", "keyword": "‘{}’", "query": "‘{}’", "title": "‘{}’", "fact": "‘{}’",
+    "days": "최근 {}일", "days_ahead": "{}일 뒤까지", "to": "→ {}", "duration_minutes": "{}분",
+    "instruction": "‘{}’", "message": "‘{}’",
+}
 
-def start_log():
-    _call_log.set([])
+
+def start_log(on_event=None):
+    """한 번의 대화 처리 시작. on_event(dict)를 주면 도구 호출 시작·끝마다 호출됩니다."""
+    log = []
+    _call_log.set(log)
+    _progress.set(on_event)
+    _tls.log, _tls.on_event = log, on_event
 
 
 def get_log():
-    return _call_log.get() or []
+    return _call_log.get() or getattr(_tls, "log", None) or []
+
+
+def emit(event: dict):
+    """진행 이벤트 보내기 (콜백이 없으면 무시)."""
+    cb = _progress.get() or getattr(_tls, "on_event", None)
+    if cb is not None:
+        try:
+            cb(event)
+        except Exception:
+            pass
+
+
+def describe(name: str, kwargs: dict) -> str:
+    """도구 호출을 '학교 공지 확인 · 행사 · ‘공모전’'처럼 한 줄로."""
+    parts = []
+    for k, v in kwargs.items():
+        if k in _ARG_HINTS and v not in ("", None, 0, False):
+            parts.append(_ARG_HINTS[k].format(str(v).replace("\n", " ")[:28]))
+    return LABELS.get(name, name) + (" · " + " · ".join(parts[:2]) if parts else "")
 
 
 class ToolError(Exception):
@@ -20,25 +55,32 @@ class ToolError(Exception):
 
 
 def tool(label: str):
-    """도구 함수 데코레이터: 호출 기록 + 오류를 AI가 이해할 수 있는 dict로 변환."""
+    """도구 함수 데코레이터: 호출 기록 + 진행 이벤트 + 오류를 AI가 이해할 수 있는 dict로 변환."""
     def deco(fn):
         LABELS[fn.__name__] = label
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            log = _call_log.get()
+            log = _call_log.get() or getattr(_tls, "log", None)
             entry = {"name": fn.__name__, "label": label, "args": kwargs, "ok": True}
             if log is not None:
                 log.append(entry)
+            text = describe(fn.__name__, kwargs)
+            emit({"type": "tool_start", "name": fn.__name__, "label": label, "text": text})
+            t0 = time.time()
             try:
                 return fn(*args, **kwargs)
             except ToolError as e:
                 entry["ok"] = False
+                entry["error"] = str(e)
                 return {"error": str(e)}
             except Exception as e:  # 네트워크·권한 오류 등
                 entry["ok"] = False
-                return {"error": f"{type(e).__name__}: {e}"}
+                entry["error"] = f"{type(e).__name__}: {e}"
+                return {"error": entry["error"]}
             finally:
+                emit({"type": "tool_end", "name": fn.__name__, "label": label, "text": text,
+                      "ok": entry["ok"], "error": entry.get("error", ""), "ms": int((time.time() - t0) * 1000)})
                 if entry["ok"]:
                     from .. import stats
                     stats.record(f"tool:{fn.__name__}")
@@ -53,3 +95,25 @@ def google_service(name: str, version: str):
     if creds is None:
         raise ToolError("구글 계정이 연동되지 않았어요. 사용자에게 설정 > 구글 연동을 먼저 하라고 안내하세요.")
     return build(name, version, credentials=creds, cache_discovery=False)
+
+
+def batch_execute(svc, requests: list) -> list:
+    """구글 API 요청 여러 개를 한 번의 HTTP 왕복으로 처리 (Gmail 메시지 25통 → 1회).
+    결과는 입력 순서대로, 실패한 항목은 None."""
+    results = [None] * len(requests)
+    if not requests:
+        return results
+
+    def cb(i):
+        def _cb(_rid, resp, exc):
+            if exc is None:
+                results[i] = resp
+        return _cb
+
+    CHUNK = 50   # Gmail batch 한도는 100
+    for s in range(0, len(requests), CHUNK):
+        batch = svc.new_batch_http_request()
+        for i in range(s, min(s + CHUNK, len(requests))):
+            batch.add(requests[i], callback=cb(i))
+        batch.execute()
+    return results

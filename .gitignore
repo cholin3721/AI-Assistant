@@ -5,3 +5,7 @@ client_secret*.json
 __pycache__/
 *.pyc
 Claude outputs/
+dist/
+build/
+*.spec
+

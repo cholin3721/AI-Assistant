@@ -1,7 +1,7 @@
 """인하공업전문대학 홈페이지 공지사항 크롤러 (K2Web 게시판)."""
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
 import requests
@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from . import tool, ToolError
 
 SITE = "https://www.inhatc.ac.kr"
+KST = timezone(timedelta(hours=9))
 BOARDS = {           # 공지사항 메뉴의 게시판 번호
     "학사": 11,
     "장학": 17,
@@ -77,7 +78,7 @@ def get_school_notices(category: str = "전체", keyword: str = "", days: int = 
     for n in names:
         if n not in BOARDS:
             raise ToolError(f"카테고리는 {', '.join(['전체'] + list(BOARDS))} 중 하나여야 해요.")
-    cutoff = (datetime.now() - timedelta(days=int(days))).strftime("%Y-%m-%d")
+    cutoff = (datetime.now(KST) - timedelta(days=int(days))).strftime("%Y-%m-%d")
     results, errors = [], []
     for n in names:
         try:

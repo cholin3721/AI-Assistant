@@ -1,24 +1,51 @@
 """AI 비서 로컬 서버. 실행: python -m app.main  → 브라우저에서 http://127.0.0.1:8765"""
+import json
+import queue
 import re
 import sys
 import threading
 import uuid
 import webbrowser
+from contextlib import asynccontextmanager
+from urllib.parse import quote, urlparse
 
-from urllib.parse import quote
-
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (agent, config, discord_bot, forms, google_auth, memory, notify, schedule_finder, scheduler,
+from . import (agent, chats, config, discord_bot, forms, google_auth, memory, notify, schedule_finder, scheduler,
                stats, telegram_bot, timetable, todos)
 from .tools import ToolError
 
-app = FastAPI(title="인하 AI 비서")
-STATIC = config.BASE_DIR / "app" / "static"
+
+@asynccontextmanager
+async def lifespan(_app):
+    scheduler.start()
+    telegram_bot.restart()
+    discord_bot.restart()
+    yield
+
+
+app = FastAPI(title="인하 AI 비서", lifespan=lifespan)
+STATIC = config.BUNDLE_DIR / "app" / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+_LOCAL_HOSTS = {"127.0.0.1", "localhost"}
+
+
+@app.middleware("http")
+async def _local_only(request: Request, call_next):
+    """로컬 전용: 다른 사이트가 이 서버를 몰래 호출하지 못하게 Host/Origin을 검사."""
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host not in _LOCAL_HOSTS:
+        return JSONResponse({"detail": "forbidden"}, status_code=403)
+    origin = request.headers.get("origin")
+    if origin:
+        hostname = (urlparse(origin).hostname or "").lower()
+        if hostname not in _LOCAL_HOSTS:
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+    return await call_next(request)
 
 
 class KeyIn(BaseModel):
@@ -31,6 +58,11 @@ class SettingsIn(BaseModel):
     setup_done: bool | None = None
     auto_scan: bool | None = None
     automation: dict | None = None
+    notice_keywords: list[str] | None = None
+
+
+class SessionIn(BaseModel):
+    session_id: str = ""
 
 
 class ChatIn(BaseModel):
@@ -116,6 +148,7 @@ def status():
                      "pending": len(schedule_finder.list_candidates("pending")),
                      "last_result": scheduler.status()["results"].get("mail_scan", {}).get("message", "")},
         "automation": cfg["automation"],
+        "notice_keywords": cfg.get("notice_keywords") or [],
         "telegram": telegram_bot.status(),
         "discord": discord_bot.status(),
         "notifications": {"unread": notify.unread()},
@@ -129,9 +162,6 @@ def set_key(body: KeyIn):
     key = body.key.strip()
     if not key:
         raise HTTPException(400, "키를 입력해주세요.")
-    if not key.startswith("AIza") and not key.startswith("AQ."):
-        # 형식이 달라도 시도는 하되, 흔한 실수를 먼저 알려줌
-        pass
     try:
         info = agent.validate_key(key)
     except agent.AgentError as e:
@@ -158,6 +188,8 @@ def settings(body: SettingsIn):
     if "automation" in upd:
         allowed = set(config.DEFAULTS["automation"])
         upd["automation"] = {k: v for k, v in upd["automation"].items() if k in allowed}
+    if "notice_keywords" in upd:
+        upd["notice_keywords"] = [str(x).strip()[:40] for x in upd["notice_keywords"] if str(x).strip()][:20]
     if "profile" in upd:
         upd["profile"] = {k: str(v)[:200] for k, v in upd["profile"].items()
                           if k in ("name", "department", "grade", "interests")}
@@ -206,17 +238,52 @@ def chat(body: ChatIn):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/chat/stream")
+def chat_stream(body: ChatIn):
+    msg = body.message.strip()
+    if not msg:
+        raise HTTPException(400, "메시지를 입력해주세요.")
+    sid = body.session_id or uuid.uuid4().hex
+    q: queue.Queue = queue.Queue()
+
+    def on_event(ev):
+        q.put(ev)
+
+    def run():
+        try:
+            res = agent.chat(sid, msg[:4000], on_event=on_event)
+            q.put({"type": "done", "reply": res["reply"], "tools": res["tools"], "model": res.get("model", ""),
+                   "reset": res.get("reset", False)})
+        except agent.AgentError as e:
+            q.put({"type": "error", "message": str(e)})
+        except Exception as e:
+            q.put({"type": "error", "message": agent.friendly_error(e)})
+        finally:
+            q.put(None)
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def gen():
+        while True:
+            ev = q.get()
+            if ev is None:
+                break
+            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/chat/history")
+def chat_history(session_id: str = ""):
+    return {"messages": chats.get(session_id)}
+
+
 @app.post("/api/chat/reset")
-def chat_reset(body: ChatIn):
+def chat_reset(body: SessionIn):
     agent.reset(body.session_id)
+    chats.clear(body.session_id)
     return {"ok": True}
-
-
-@app.on_event("startup")
-def _startup():
-    scheduler.start()
-    telegram_bot.restart()
-    discord_bot.restart()
 
 
 def _bad(e: Exception):
@@ -297,6 +364,23 @@ def discord_test():
 def discord_disconnect():
     discord_bot.disconnect()
     return {"ok": True}
+
+
+@app.get("/api/discord/channels")
+def discord_channels():
+    return {"channels": discord_bot.list_text_channels()}
+
+
+class TeamChannelIn(BaseModel):
+    channel_id: str = ""
+
+
+@app.post("/api/discord/team")
+def discord_team(body: TeamChannelIn):
+    try:
+        return discord_bot.set_team_channel(body.channel_id)
+    except discord_bot.DiscordError as e:
+        raise _bad(e)
 
 
 # ---------- 사용 통계 ----------

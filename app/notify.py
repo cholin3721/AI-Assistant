@@ -1,10 +1,14 @@
-"""알림 센터: 화면의 알림함 + 연결된 메신저(디스코드·텔레그램)로 동시에 보냄."""
+"""알림 센터: 화면의 알림함 + 연결된 메신저(디스코드·텔레그램) + 윈도우 토스트로 동시에 보냄."""
 import time
 import uuid
 
-from . import store
+from . import config, store
 
 DEFAULT = {"items": []}
+
+
+def config_team_share() -> bool:
+    return bool(config.load().get("automation", {}).get("team_share", True))
 
 
 def add(kind: str, title: str, body: str, link: str = "", push: bool = True) -> dict:
@@ -19,10 +23,13 @@ def add(kind: str, title: str, body: str, link: str = "", push: bool = True) -> 
     from . import stats
     stats.record(f"notify:{kind}")
     if push:
-        from . import discord_bot, telegram_bot
+        from . import desktop, discord_bot, telegram_bot
         text = f"**{title}**\n\n{body}" + (f"\n\n{link}" if link else "")
         for messenger in (discord_bot, telegram_bot):
             messenger.send_safe(text)
+        desktop.show(title, body)
+        if kind in ("reminder", "schedule", "notice") and config_team_share():
+            discord_bot.send_team_safe(text)
     return n
 
 

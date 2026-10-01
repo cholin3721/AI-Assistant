@@ -7,7 +7,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from . import config
-from .tools import ToolError, google_service, tool
+from .tools import ToolError, batch_execute, google_service, tool
 
 KST = timezone(timedelta(hours=9))
 NOREPLY = ("noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "notification", "newsletter")
@@ -46,14 +46,12 @@ def _my_email(svc) -> str:
 
 def _threads(svc, q: str, limit: int) -> list:
     res = svc.users().threads().list(userId="me", q=q, maxResults=limit).execute()
-    out = []
-    for t in res.get("threads", []):
-        th = svc.users().threads().get(userId="me", id=t["id"], format="metadata",
-                                       metadataHeaders=["From", "To", "Subject", "Date"]).execute()
-        msgs = th.get("messages", [])
-        if msgs:
-            out.append(msgs)
-    return out
+    ids = [t["id"] for t in res.get("threads", [])]
+    ths = batch_execute(svc, [
+        svc.users().threads().get(userId="me", id=i, format="metadata",
+                                  metadataHeaders=["From", "To", "Subject", "Date"])
+        for i in ids])
+    return [th["messages"] for th in ths if th and th.get("messages")]
 
 
 def classify(items: list, mode: str) -> dict:

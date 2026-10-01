@@ -1,7 +1,8 @@
 "use strict";
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
-let sessionId = Math.random().toString(36).slice(2);
+let sessionId = store("session_id") || Math.random().toString(36).slice(2);
+store("session_id", sessionId);
 let state = null;
 let busy = false;
 
@@ -107,14 +108,66 @@ async function send(text) {
   if (!state?.gemini.set) { openWizard(2); return; }
   busy = true; $("#send").disabled = true;
   addMsg("user", text);
-  const typing = addMsg("bot", '<div class="typing"><span></span><span></span><span></span></div>');
+  const typing = addMsg("bot", '<div class="typing"><span></span><span></span><span></span></div><ul class="progress"></ul>');
+  const progressUl = typing.querySelector(".progress");
+  const bubble = typing.querySelector(".bubble");
+  const markTool = (name, ok) => {
+    const li = [...progressUl.querySelectorAll("li")].reverse().find((x) => x.dataset.name === name && !x.classList.contains("done"));
+    if (li) { li.classList.add("done"); if (!ok) li.classList.add("fail"); }
+  };
+  let acc = "", doneEv = null;
   try {
-    const r = await api("/api/chat", { method: "POST", body: { session_id: sessionId, message: text } });
+    const res = await fetch("/api/chat/stream", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, message: text }),
+    });
+    let data = {};
+    if (!res.ok) {
+      try { data = await res.json(); } catch (_) {}
+      throw new Error(data.detail || `요청 실패 (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const block of parts) {
+        const line = block.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line.slice(6)); } catch (_) { continue; }
+        if (ev.type === "tool_start") {
+          const li = document.createElement("li");
+          li.dataset.name = ev.name; li.textContent = ev.text || ev.label;
+          progressUl.appendChild(li);
+        } else if (ev.type === "tool_end") {
+          markTool(ev.name, ev.ok !== false);
+        } else if (ev.type === "status") {
+          const li = document.createElement("li"); li.className = "st"; li.textContent = ev.text;
+          progressUl.appendChild(li);
+        } else if (ev.type === "delta" && ev.text) {
+          acc += ev.text;
+          bubble.querySelector(".typing")?.remove();
+          let live = bubble.querySelector(".live");
+          if (!live) { live = document.createElement("div"); live.className = "live"; bubble.insertBefore(live, progressUl); }
+          live.innerHTML = md(acc);
+        } else if (ev.type === "done") {
+          doneEv = ev; if (ev.reply) acc = ev.reply;
+        } else if (ev.type === "error") {
+          throw new Error(ev.message || "오류가 발생했어요.");
+        }
+        $("#messages").scrollTop = $("#messages").scrollHeight;
+      }
+    }
     typing.remove();
-    const botEl = addMsg("bot", md(r.reply), r.tools);
-    addFeedback(botEl, r.tools);
-    speak(r.reply);
-    const used = (n) => (r.tools || []).some((t) => t.name === n && t.ok);
+    const tools = doneEv?.tools || [];
+    const botEl = addMsg("bot", md(acc || "응답을 만들지 못했어요."), tools);
+    addFeedback(botEl, tools);
+    speak(acc);
+    const used = (n) => tools.some((t) => t.name === n && t.ok);
     if (used("find_events_in_emails") || used("find_events_in_notices")) openSched(false);
     if (used("draft_application")) openForms(true);
   } catch (e) {
@@ -131,8 +184,9 @@ function autosize() { const t = $("#input"); t.style.height = "auto"; t.style.he
 $("#input").addEventListener("input", autosize);
 $$(".quick, .ex").forEach((b) => b.addEventListener("click", () => send(b.dataset.q)));
 $("#btn-new").addEventListener("click", async () => {
-  await api("/api/chat/reset", { method: "POST", body: { session_id: sessionId, message: "-" } }).catch(() => {});
+  await api("/api/chat/reset", { method: "POST", body: { session_id: sessionId } }).catch(() => {});
   sessionId = Math.random().toString(36).slice(2);
+  store("session_id", sessionId);
   location.reload();
 });
 $("#conn-gemini").addEventListener("click", () => (state?.gemini.set ? openSettings("ai") : openWizard(2)));
@@ -457,7 +511,7 @@ function updateBell() {
   }
   lastUnread = n;
 }
-const KIND = { briefing: "브리핑", weekly: "주간 회고", reminder: "마감", schedule: "일정 후보", system: "안내" };
+const KIND = { briefing: "브리핑", weekly: "주간 회고", reminder: "마감", schedule: "일정 후보", notice: "관심 공지", system: "안내" };
 function timeAgo(ts) {
   const d = (Date.now() / 1000 - ts) | 0;
   if (d < 60) return "방금"; if (d < 3600) return `${(d / 60) | 0}분 전`; if (d < 86400) return `${(d / 3600) | 0}시간 전`;
@@ -539,7 +593,30 @@ function fillAuto() {
   });
   $("#s-auto-scan").checked = !!state.schedule.enabled;
   updateNotifBtn();
+  renderKeywords(state.notice_keywords || []);
 }
+function renderKeywords(list) {
+  const ul = $("#kw-list"); if (!ul) return;
+  ul.innerHTML = "";
+  if (!list.length) ul.innerHTML = '<li class="muted">아직 없어요. 예: 장학, AI, 공모전</li>';
+  list.forEach((k) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span>${esc(k)}</span><button class="x" title="지우기">×</button>`;
+    li.querySelector(".x").addEventListener("click", () => saveKeywords(list.filter((x) => x !== k)));
+    ul.appendChild(li);
+  });
+}
+async function saveKeywords(list) {
+  await api("/api/settings", { method: "POST", body: { notice_keywords: list } });
+  state.notice_keywords = list; renderKeywords(list); toast("키워드를 저장했어요");
+}
+$("#kw-add")?.addEventListener("click", () => {
+  const v = ($("#kw-input").value || "").trim(); if (!v) return;
+  const list = [...(state.notice_keywords || [])];
+  v.split(/[,，]/).map((s) => s.trim()).filter(Boolean).forEach((k) => { if (!list.includes(k)) list.push(k); });
+  $("#kw-input").value = ""; saveKeywords(list.slice(0, 20));
+});
+$("#kw-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) $("#kw-add").click(); });
 $$("[data-auto]").forEach((el) => el.addEventListener("change", async () => {
   const k = el.dataset.auto;
   const v = el.type === "checkbox" ? el.checked : k === "weekly_day" ? +el.value : el.value;
@@ -582,7 +659,26 @@ function fillDiscord() {
     }, 3000);
   }
   if (d.linked) $("#dc-done-text").textContent = `${d.bot_username} 연결됨${d.owner_name ? ` · 주인: ${d.owner_name}` : ""}${d.online ? "" : " (봇 접속 중…)"}`;
+  fillTeam(d);
 }
+async function fillTeam(d) {
+  const box = $("#dc-team"); if (!box) return;
+  box.classList.toggle("hidden", !d.linked);
+  if (!d.linked) return;
+  $("#dc-team-now").textContent = d.team_channel_name ? `현재: ${d.team_channel_name}` : "아직 팀 채널이 없어요. 마감 알림·일정 후보를 공유할 채널을 고르세요 (봇은 그 채널을 읽지 않고 보내기만 합니다).";
+  const sel = $("#dc-team-sel");
+  try {
+    const r = await api("/api/discord/channels");
+    sel.innerHTML = '<option value="">(공유 안 함)</option>' + (r.channels || []).map((c) =>
+      `<option value="${esc(c.id)}" ${c.id === d.team_channel_id ? "selected" : ""}>${esc(c.guild)} ${esc(c.name)}</option>`).join("");
+  } catch (_) { sel.innerHTML = '<option value="">채널 목록을 불러오지 못했어요</option>'; }
+}
+$("#dc-team-save")?.addEventListener("click", async () => {
+  try {
+    await api("/api/discord/team", { method: "POST", body: { channel_id: $("#dc-team-sel").value } });
+    await refreshStatus(); fillDiscord(); toast("팀 채널을 저장했어요");
+  } catch (e) { toast(e.message); }
+});
 $("#dc-save").addEventListener("click", async () => {
   const text = $("#dc-token").value.trim(); if (!text) return setResult($("#dc-result"), "bad", "토큰을 붙여넣어 주세요.");
   setResult($("#dc-result"), "wait", "확인하는 중…");
@@ -931,5 +1027,12 @@ $("#st-period").addEventListener("change", () => loadStats());
   fillProfile("p");
   if (!state.setup_done) openWizard(0);
   else if (!state.gemini.set) openWizard(2);
+  try {
+    const r = await api(`/api/chat/history?session_id=${encodeURIComponent(sessionId)}`);
+    (r.messages || []).forEach((m) => {
+      if (m.role === "user") addMsg("user", m.text);
+      else addMsg("bot", md(m.text), m.tools);
+    });
+  } catch (_) {}
   $("#input").focus();
 })();

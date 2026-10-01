@@ -18,7 +18,8 @@ from . import config
 
 API = "https://discord.com/api/v10"
 LIMIT = 1900   # 디스코드 메시지 최대 2000자
-EMPTY = {"token": "", "bot_username": "", "app_id": "", "owner_id": None, "owner_name": "", "link_code": ""}
+EMPTY = {"token": "", "bot_username": "", "app_id": "", "owner_id": None, "owner_name": "", "link_code": "",
+          "team_channel_id": "", "team_channel_name": ""}
 _state = {"gen": 0, "error": "", "ready": False, "loop": None, "client": None}
 
 HELP = ("인하 AI 비서예요. 여기서 그냥 말 걸면 돼요.\n"
@@ -81,6 +82,8 @@ def status() -> dict:
         "link_code": "" if linked else d.get("link_code", ""),
         "online": _state["ready"],
         "error": _state["error"],
+        "team_channel_id": d.get("team_channel_id", ""),
+        "team_channel_name": d.get("team_channel_name", ""),
     }
 
 
@@ -257,3 +260,70 @@ def send_safe(text: str):
         send(text)
     except Exception as e:
         _state["error"] = f"알림 전송 실패: {e}"
+
+
+def list_text_channels() -> list:
+    """봇이 들어 있는 서버의 텍스트 채널 목록 (팀 채널 고를 때)."""
+    loop, client = _state.get("loop"), _state.get("client")
+    if not (loop and client and _state["ready"]):
+        return []
+
+    async def go():
+        out = []
+        for g in client.guilds:
+            for ch in getattr(g, "text_channels", []):
+                out.append({"id": str(ch.id), "name": f"#{ch.name}", "guild": g.name})
+        return out
+    try:
+        return asyncio.run_coroutine_threadsafe(go(), loop).result(timeout=10)
+    except Exception:
+        return []
+
+
+def set_team_channel(channel_id: str) -> dict:
+    d = _cfg()
+    cid = re.sub(r"\D", "", channel_id or "")
+    if not cid:
+        config.save({"discord": {**d, "team_channel_id": "", "team_channel_name": ""}})
+        return status()
+    loop, client = _state.get("loop"), _state.get("client")
+    if not (loop and client and _state["ready"]):
+        raise DiscordError("디스코드 봇이 아직 접속 중이에요. 잠시 후 다시 시도해주세요.")
+
+    async def go():
+        ch = client.get_channel(int(cid)) or await client.fetch_channel(int(cid))
+        guild = getattr(ch, "guild", None)
+        name = f"#{getattr(ch, 'name', cid)}"
+        if guild is not None:
+            name = f"{guild.name} · {name}"
+        return name
+    try:
+        name = asyncio.run_coroutine_threadsafe(go(), loop).result(timeout=15)
+    except Exception:
+        raise DiscordError("그 채널을 찾지 못했어요. 봇이 그 서버에 들어가 있는지, 채널 ID가 맞는지 확인해주세요.")
+    config.save({"discord": {**d, "team_channel_id": cid, "team_channel_name": name}})
+    return status()
+
+
+def send_team(text: str):
+    cid = _cfg().get("team_channel_id")
+    if not cid:
+        raise DiscordError("팀 채널이 설정되지 않았어요.")
+    loop, client = _state.get("loop"), _state.get("client")
+    if not (loop and client and _state["ready"]):
+        raise DiscordError("디스코드 봇이 아직 접속 중이에요.")
+
+    async def go():
+        ch = client.get_channel(int(cid)) or await client.fetch_channel(int(cid))
+        for part in chunks(text):
+            await ch.send(part, suppress_embeds=True)
+    asyncio.run_coroutine_threadsafe(go(), loop).result(timeout=30)
+
+
+def send_team_safe(text: str):
+    if not _cfg().get("team_channel_id"):
+        return
+    try:
+        send_team(text)
+    except Exception as e:
+        _state["error"] = f"팀 채널 전송 실패: {e}"
