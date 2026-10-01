@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>인하 AI 비서</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-bell" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M11 5 6 9H2v6h4l5 4V5ZM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></symbol>
+</svg>
+<div id="app">
+  <!-- 사이드바 -->
+  <aside class="side">
+    <div class="brand"><span class="logo">AI</span><div class="grow"><b>인하 AI 비서</b><small>내 PC에서만 동작해요</small></div>
+      <button class="bell" id="btn-bell" type="button" title="알림함"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bell"/></svg><span class="badge hidden" id="bell-badge">0</span></button></div>
+
+    <section class="block">
+      <h4>연결 상태</h4>
+      <div class="conn" id="conn-gemini"><span class="dot"></span><div><b>Gemini</b><small>확인 중…</small></div></div>
+      <div class="conn" id="conn-google"><span class="dot"></span><div><b>Gmail · 캘린더 · 드라이브</b><small>확인 중…</small></div></div>
+      <div class="conn" id="conn-tg"><span class="dot"></span><div><b>메신저 알림</b><small>확인 중…</small></div></div>
+      <div class="conn on" id="conn-school"><span class="dot"></span><div><b>학교 공지</b><small>학사·장학·행사·채용·일반</small></div></div>
+    </section>
+
+    <section class="block">
+      <h4>챙길 것</h4>
+      <button class="sched-btn" id="btn-sched" type="button"><span>일정 후보</span><span class="badge hidden" id="sched-badge">0</span></button>
+      <button class="sched-btn" id="btn-todo" type="button"><span>할 일</span><span class="count" id="todo-count">0</span></button>
+      <small class="sched-meta" id="sched-meta"></small>
+    </section>
+
+    <section class="block">
+      <h4>바로 해보기</h4>
+      <button class="quick" data-q="오늘의 브리핑을 해줘. 오늘 일정과 수업, 안 읽은 중요한 메일, 답장해야 할 메일, 3일 안 마감, 최근 학교 공지 중 나에게 맞는 것을 정리해줘.">오늘의 브리핑</button>
+      <button class="quick" data-q="안 읽은 메일을 중요한 것 위주로 요약해줘.">안 읽은 메일 요약</button>
+      <button class="quick" data-q="내가 답장 안 한 메일이랑, 내가 보냈는데 답이 없는 메일을 찾아줘. 필요하면 초안도 제안해줘.">답장 챙기기</button>
+      <button class="quick" data-q="이번 주에 1시간짜리 팀 회의를 잡을 수 있는 빈 시간을 찾아줘.">이번 주 빈 시간</button>
+      <button class="quick" data-q="내 학과·학년·관심사에 맞는 학교 공지(공모전, 장학, 비교과, 특강)를 찾아서 마감일과 혜택을 함께 알려줘.">나에게 맞는 공지</button>
+      <button class="quick" data-q="최근 일주일 메일과 학교 공지에서 챙겨야 할 일정(회의, 발표, 마감일)을 찾아줘.">메일·공지에서 일정 찾기</button>
+    </section>
+
+    <div class="side-bottom">
+      <button class="ghost" id="btn-new">새 대화</button>
+      <button class="ghost" id="btn-settings">설정</button>
+    </div>
+  </aside>
+
+  <!-- 채팅 -->
+  <main class="chat">
+    <div class="messages" id="messages">
+      <div class="empty" id="empty">
+        <h2>무엇을 도와드릴까요?</h2>
+        <p>메일·일정·드라이브·학교 공지·할 일을 한 번에 물어보세요. 마이크 버튼으로 말해도 돼요.</p>
+        <div class="examples">
+          <button class="ex" data-q="교수님한테 온 메일 있어? 있으면 요약하고 답장 초안 만들어줘">교수님 메일 확인하고 답장 초안 만들어줘</button>
+          <button class="ex" data-q="AID 아이디어 공모전 신청하려면 뭐 해야 돼? 체크리스트 만들어줘">공모전 신청 체크리스트 만들어줘</button>
+          <button class="ex" data-q="다음 주에 팀플 회의 2시간 할 수 있는 시간 추천해줘">다음 주 팀플 회의 시간 추천해줘</button>
+          <button class="ex" data-q="기억해: 내 캡스톤 지도교수님은 김철수 교수님이고 메일은 kim@inhatc.ac.kr이야">지도교수님 정보 기억해줘</button>
+        </div>
+      </div>
+    </div>
+    <form class="composer" id="composer">
+      <button type="button" class="icon-btn" id="mic" title="말로 입력 (크롬·엣지)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mic"/></svg></button>
+      <textarea id="input" rows="1" placeholder="메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
+      <button type="button" class="icon-btn" id="tts" title="답변 읽어주기"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-speaker"/></svg></button>
+      <button type="submit" id="send">보내기</button>
+    </form>
+  </main>
+</div>
+
+<!-- 설정 마법사 -->
+<div class="overlay hidden" id="wizard">
+  <div class="wiz">
+    <div class="wiz-head">
+      <ol class="steps" id="steps">
+        <li>시작</li><li>내 정보</li><li>Gemini 키</li><li>구글 연동</li><li>완료</li>
+      </ol>
+    </div>
+    <div class="wiz-body">
+
+      <!-- 0. 시작 -->
+      <section class="page" data-page="0">
+        <h2>안녕하세요! 3단계면 내 AI 비서가 준비돼요</h2>
+        <p class="lead">메일, 일정, 드라이브, 학교 공지를 한곳에서 물어보고 정리받을 수 있어요.</p>
+        <ul class="feat">
+          <li><b>메일</b> 안 읽은 메일 요약, 답장 초안 작성 (자동 발송은 절대 안 해요)</li>
+          <li><b>일정</b> 이번 주 일정 정리, 말로 일정 등록</li>
+          <li><b>드라이브</b> 문서 찾고 요약</li>
+          <li><b>학교 공지</b> 내 학과·관심사에 맞는 공모전·장학·특강 추천, 한글(hwp) 첨부까지 읽기</li>
+          <li><b>먼저 챙기기</b> 아침 브리핑, 마감 D-3·D-1 알림, 답장 안 한 메일 — 폰(텔레그램)으로도</li>
+          <li><b>나를 기억</b> 지도교수·팀원 연락처, 시간표, 할 일</li>
+        </ul>
+        <div class="note safe"><b>안심하세요.</b> 입력하는 키와 구글 로그인 정보는 이 PC의 <code>data</code> 폴더에만 저장되고, 어떤 서버로도 보내지 않아요.</div>
+      </section>
+
+      <!-- 1. 내 정보 -->
+      <section class="page" data-page="1">
+        <h2>나에 대해 알려주세요 <span class="opt">선택</span></h2>
+        <p class="lead">공지 추천을 내게 맞게 해주는 데 써요. 나중에 설정에서 바꿀 수 있어요.</p>
+        <div class="grid2">
+          <label>이름(호칭)<input id="p-name" placeholder="예: 민수"></label>
+          <label>학과<input id="p-department" placeholder="예: 컴퓨터정보공학과"></label>
+          <label>학년<select id="p-grade"><option value="">선택</option><option>1학년</option><option>2학년</option><option>3학년</option><option>전공심화</option></select></label>
+          <label>관심사<input id="p-interests" placeholder="예: AI, 백엔드, 공모전, 장학금"></label>
+        </div>
+      </section>
+
+      <!-- 2. Gemini 키 -->
+      <section class="page" data-page="2">
+        <h2>Gemini API 키 넣기 <span class="time">약 1분 · 무료</span></h2>
+        <p class="lead">비서의 '두뇌'예요. 구글 계정만 있으면 무료로 발급돼요.</p>
+        <ol class="howto">
+          <li><span>아래 버튼으로 Google AI Studio를 열고 구글 계정으로 로그인해요.</span>
+            <a class="btn-link" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio 열기 ↗</a></li>
+          <li><span><b>「API 키 만들기 (Create API key)」</b> 버튼을 눌러요. 프로젝트를 고르라고 하면 아무거나 고르거나 새로 만들어요.</span></li>
+          <li><span>만들어진 키 옆의 <b>복사</b> 버튼을 누르고, 아래 칸에 붙여넣어요. (<code>AIza…</code>로 시작해요)</span></li>
+        </ol>
+        <div class="keyrow">
+          <input id="gemini-key" type="password" placeholder="여기에 API 키 붙여넣기 (Ctrl+V)" autocomplete="off">
+          <button class="ghost sm" id="key-eye" type="button">보기</button>
+          <button id="key-check" type="button">확인</button>
+        </div>
+        <div class="result" id="key-result"></div>
+        <details class="trouble"><summary>잘 안 되나요?</summary>
+          <ul>
+            <li><b>학교 계정(@inhatc.ac.kr)에서 AI Studio가 안 열리면</b> 개인 Gmail 계정으로 로그인해보세요. 학교 계정은 관리자 설정으로 막혀 있을 수 있어요.</li>
+            <li><b>“키가 올바르지 않아요”</b>가 나오면 앞뒤 공백 없이 다시 복사해보세요.</li>
+            <li><b>“사용량 한도”</b>가 나오면 무료 한도에 걸린 거예요. 1분 뒤 다시 하거나 설정에서 -lite 모델을 골라보세요.</li>
+          </ul>
+        </details>
+      </section>
+
+      <!-- 3. 구글 연동 -->
+      <section class="page" data-page="3">
+        <h2>Gmail · 캘린더 · 드라이브 연결 <span class="time">약 5분 · 처음 한 번만</span></h2>
+        <p class="lead">나만 쓰는 '구글 연결 통로'를 만드는 과정이에요. 순서대로 따라 하고 각 단계의 체크를 눌러주세요. <b>개인 Gmail 계정</b>을 추천해요.</p>
+        <ol class="howto check" id="g-steps">
+          <li><input type="checkbox"><div><b>프로젝트 만들기</b> — 이름은 <code>AI-Assistant</code>처럼 아무거나 넣고 「만들기」.
+            <a class="btn-link" href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">프로젝트 만들기 열기 ↗</a></div></li>
+          <li><input type="checkbox"><div><b>API 3개 켜기</b> — 방금 만든 프로젝트가 선택돼 있는지 확인하고 「다음」→「사용 설정」. Gmail·Calendar·Drive가 한 번에 켜져요.
+            <a class="btn-link" href="https://console.cloud.google.com/flows/enableapi?apiid=gmail.googleapis.com,calendar-json.googleapis.com,drive.googleapis.com" target="_blank" rel="noopener">API 한 번에 켜기 ↗</a></div></li>
+          <li><input type="checkbox"><div><b>앱 정보 등록</b> — 「시작하기」를 누르고 앱 이름(예: <code>내 AI 비서</code>), 지원 이메일(내 메일) 입력 → 대상은 <b>「외부」</b> → 연락처에 내 메일 → 정책 동의 → 「만들기」.
+            <a class="btn-link" href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener">Google 인증 플랫폼 열기 ↗</a></div></li>
+          <li><input type="checkbox"><div><b>나를 테스트 사용자로 추가</b> — 「테스트 사용자」 아래 「+ Add users」→ 로그인할 내 Gmail 주소 입력 → 저장. <span class="warn">이걸 빠뜨리면 로그인 때 ‘액세스 차단’이 떠요.</span>
+            <a class="btn-link" href="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener">대상(Audience) 열기 ↗</a></div></li>
+          <li><input type="checkbox"><div><b>열쇠 파일 받기</b> — 「클라이언트 만들기」→ 애플리케이션 유형 <b>「데스크톱 앱」</b> → 「만들기」→ 팝업에서 <b>「JSON 다운로드」</b>.
+            <a class="btn-link" href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener">클라이언트 화면 열기 ↗</a></div></li>
+          <li><input type="checkbox" id="g-step-file"><div><b>받은 JSON 파일을 여기에 올리기</b>
+            <label class="drop" id="drop"><input type="file" id="client-file" accept=".json,application/json" hidden>
+              <span id="drop-text"><b>client_secret_….json</b> 파일을 끌어다 놓거나 클릭해서 선택</span></label></div></li>
+          <li><input type="checkbox" id="g-step-login"><div><b>구글 로그인</b> — 버튼을 누르면 새 브라우저 창이 열려요. 계정 선택 → <b>“Google에서 확인하지 않은 앱”</b> 화면이 나오면 「고급」→「(안전하지 않음)으로 이동」을 눌러요. 직접 만든 앱이라 괜찮아요. 권한을 모두 체크하고 「계속」.
+            <div><button id="g-login" type="button">구글 로그인</button></div></div></li>
+        </ol>
+        <div class="result" id="g-result"></div>
+        <details class="trouble"><summary>잘 안 되나요?</summary>
+          <ul>
+            <li><b>“액세스 차단됨: 앱이 테스트 중”</b> → 4번(테스트 사용자 추가)에서 로그인한 계정과 같은 주소를 넣었는지 확인하세요.</li>
+            <li><b>“웹 애플리케이션 유형”</b> 오류 → 5번에서 유형을 <b>데스크톱 앱</b>으로 다시 만들어주세요.</li>
+            <li><b>“API has not been used / disabled”</b> → 2번 API 켜기를 같은 프로젝트에서 했는지 확인하세요.</li>
+            <li>테스트 모드 앱은 <b>7일마다 로그인이 만료</b>돼요. 그때는 설정에서 「구글 로그인」만 다시 누르면 돼요.</li>
+          </ul>
+        </details>
+      </section>
+
+      <!-- 4. 완료 -->
+      <section class="page" data-page="4">
+        <h2>준비 완료!</h2>
+        <p class="lead" id="done-summary"></p>
+        <p>이렇게 말해보세요.</p>
+        <ul class="feat">
+          <li>“오늘의 브리핑 해줘”</li>
+          <li>“안 읽은 메일 중에 답장해야 하는 거 있어?”</li>
+          <li>“장학금 공지 중에 지금 신청할 수 있는 거 알려줘”</li>
+          <li>“금요일 오후 2시에 팀플 회의 일정 넣어줘”</li>
+        </ul>
+      </section>
+    </div>
+    <div class="wiz-foot">
+      <button class="ghost" id="wiz-prev" type="button">이전</button>
+      <span class="spacer"></span>
+      <button class="ghost" id="wiz-skip" type="button">나중에 하기</button>
+      <button id="wiz-next" type="button">다음</button>
+    </div>
+  </div>
+</div>
+
+<!-- 설정 -->
+<div class="overlay hidden" id="settings">
+  <div class="modal wide">
+    <div class="modal-head"><h3>설정</h3><button class="ghost sm" id="set-close">닫기</button></div>
+    <nav class="tabs" id="set-tabs">
+      <button data-tab="profile" class="on">내 정보</button><button data-tab="ai">AI · 기억</button><button data-tab="google">구글</button>
+      <button data-tab="auto">자동 알림</button><button data-tab="tg">메신저</button><button data-tab="tt">시간표</button>
+    </nav>
+    <div class="modal-body">
+      <section class="tab" data-tab="profile">
+        <p class="muted">공지 추천과 브리핑을 나에게 맞추는 데 써요.</p>
+        <div class="grid2">
+          <label>이름(호칭)<input id="s-name"></label>
+          <label>학과<input id="s-department"></label>
+          <label>학년<select id="s-grade"><option value="">선택</option><option>1학년</option><option>2학년</option><option>3학년</option><option>전공심화</option></select></label>
+          <label>관심사<input id="s-interests"></label>
+        </div>
+        <button class="sm" id="s-save-profile">내 정보 저장</button>
+      </section>
+
+      <section class="tab hidden" data-tab="ai">
+        <h4>Gemini</h4>
+        <p class="muted">현재 키: <code id="s-key-mask">-</code></p>
+        <div class="keyrow"><input id="s-key" type="password" placeholder="새 키로 바꾸려면 붙여넣기"><button class="sm" id="s-key-save">키 변경</button></div>
+        <label>모델<select id="s-model"></select></label>
+        <p class="muted">빠른 응답·무료 한도가 넉넉한 flash 계열을 추천해요.</p>
+        <h4>비서가 기억하는 것</h4>
+        <p class="muted">대화 중 "기억해"라고 말해도 저장돼요. 비밀번호·계좌 같은 정보는 저장하지 않아요.</p>
+        <div class="keyrow"><input id="mem-input" placeholder="예: 팀원 민수 메일은 ms@gmail.com"><button class="sm" id="mem-add">추가</button></div>
+        <ul class="plain-list" id="mem-list"></ul>
+      </section>
+
+      <section class="tab hidden" data-tab="google">
+        <p id="s-google-state" class="muted">-</p>
+        <div class="row">
+          <button class="sm" id="s-google-login">구글 로그인</button>
+          <button class="ghost sm" id="s-google-guide">연동 가이드 열기</button>
+          <button class="ghost sm danger" id="s-google-off">연결 해제</button>
+        </div>
+      </section>
+
+      <section class="tab hidden" data-tab="auto">
+        <p class="muted">비서가 먼저 챙겨서 알림함(종 모양)과 텔레그램으로 보내줘요. <b>비서 프로그램이 켜져 있을 때만</b> 동작해요.</p>
+        <div class="auto-row"><label class="check"><input type="checkbox" data-auto="briefing"> 아침 브리핑</label>
+          <input type="time" data-auto="briefing_time"><button class="ghost sm" data-run="briefing">지금 받아보기</button></div>
+        <div class="auto-row"><label class="check"><input type="checkbox" data-auto="weekly"> 주간 회고</label>
+          <select data-auto="weekly_day"><option value="0">월요일</option><option value="1">화요일</option><option value="2">수요일</option><option value="3">목요일</option><option value="4">금요일</option><option value="5">토요일</option><option value="6">일요일</option></select>
+          <input type="time" data-auto="weekly_time"><button class="ghost sm" data-run="weekly">지금 받아보기</button></div>
+        <div class="auto-row"><label class="check"><input type="checkbox" data-auto="reminders"> 마감 알림 <span class="muted">(D-3 · D-1 · 당일)</span></label>
+          <span class="spacer"></span><button class="ghost sm" data-run="reminders">지금 확인</button></div>
+        <div class="auto-row"><label class="check"><input type="checkbox" id="s-auto-scan"> 메일에서 일정 자동 찾기 <span class="muted">(30분마다)</span></label></div>
+        <div class="auto-row"><label class="check"><input type="checkbox" data-auto="notice_scan"> 학교 공지에서 일정 자동 찾기 <span class="muted">(6시간마다)</span></label>
+          <span class="spacer"></span><button class="ghost sm" data-run="notice_scan">지금 확인</button></div>
+        <div class="result" id="auto-result"></div>
+        <h4>브라우저 알림</h4>
+        <p class="muted">이 화면이 열려 있으면 윈도우 알림으로도 띄워줘요.</p>
+        <button class="ghost sm" id="btn-browser-notif">브라우저 알림 켜기</button>
+        <h4>PC 켤 때 자동 실행</h4>
+        <p class="muted">폴더의 <code>autostart_on.bat</code>을 한 번 실행하면 윈도우 시작 시 비서가 최소화된 채로 켜져요. 끄려면 <code>autostart_off.bat</code>.</p>
+      </section>
+
+      <section class="tab hidden" data-tab="tg">
+        <h4>디스코드 <span class="time">추천 · 약 3분</span></h4>
+        <p class="muted">디스코드 DM으로 브리핑·마감 알림을 받고, DM으로 비서에게 바로 말을 걸 수 있어요.</p>
+        <div id="dc-setup">
+          <ol class="howto">
+            <li><span><b>앱 만들기</b> — 개발자 포털에서 「New Application」→ 이름(예: <code>내 AI 비서</code>) 입력 → 약관 체크 → 「Create」.
+              <a class="btn-link" href="https://discord.com/developers/applications" target="_blank" rel="noopener">개발자 포털 열기 ↗</a></span></li>
+            <li><span><b>토큰 복사</b> — 왼쪽 메뉴 「Bot」→ 「Reset Token」→ 「Yes, do it!」→ 「Copy」. <span class="warn">토큰은 비밀번호와 같아요. 다른 곳에 올리지 마세요.</span></span></li>
+            <li><span>복사한 토큰을 아래에 붙여넣어요.</span></li>
+          </ol>
+          <div class="keyrow"><input id="dc-token" type="password" placeholder="디스코드 봇 토큰 붙여넣기" autocomplete="off"><button class="sm" id="dc-save">확인</button></div>
+        </div>
+        <div id="dc-link" class="hidden">
+          <p><b id="dc-bot"></b> 봇을 확인했어요. 두 단계만 더 하면 끝나요.</p>
+          <ol class="howto">
+            <li><span><b>내 서버에 초대</b> — 버튼을 누르고 서버를 고른 뒤 「승인」. 서버가 없으면 디스코드 왼쪽 「+」→「직접 만들기」로 나만의 서버를 먼저 만들어요.
+              <br><a class="btn-big dc" id="dc-invite" href="#" target="_blank" rel="noopener">내 서버에 봇 초대하기 ↗</a></span></li>
+            <li><span><b>연결 코드 보내기</b> — 봇이 디스코드 DM으로 인사를 보내요. 거기에 아래 코드를 답장하세요.
+              <span class="code" id="dc-code">------</span>
+              DM이 안 오면 서버 멤버 목록에서 봇을 눌러 직접 메시지를 보내도 돼요.</span></li>
+          </ol>
+          <p class="muted">연결을 기다리는 중… <span id="dc-online"></span></p>
+          <button class="ghost sm danger" id="dc-cancel">처음부터 다시</button>
+        </div>
+        <div id="dc-done" class="hidden">
+          <p class="ok-text" id="dc-done-text"></p>
+          <p class="muted">DM에서 그냥 말 걸면 돼요. <code>브리핑</code> 지금 브리핑, <code>할 일</code> 할 일 보기, <code>도움말</code>. 주인으로 등록된 계정 외에는 응답하지 않아요.</p>
+          <div class="row"><button class="sm" id="dc-test">테스트 메시지 보내기</button><button class="ghost sm danger" id="dc-off">연결 해제</button></div>
+        </div>
+        <div class="result" id="dc-result"></div>
+        <hr class="sep">
+        <details class="msgr" id="tg-details"><summary><b>텔레그램</b> <span class="muted">(선택 · 함께 써도 돼요)</span></summary>
+        <div id="tg-setup">
+          <p class="muted">폰으로 브리핑·마감 알림을 받고, 폰에서 비서에게 바로 말을 걸 수 있어요. <span class="time">약 2분</span></p>
+          <ol class="howto">
+            <li><span>텔레그램 앱에서 <b>BotFather</b>를 열어요. <a class="btn-link" href="https://t.me/BotFather" target="_blank" rel="noopener">BotFather 열기 ↗</a></span></li>
+            <li><span><code>/newbot</code>을 보내고, 봇 이름(예: <code>내 AI 비서</code>)과 아이디(영문, <b>bot으로 끝나게</b>, 예: <code>minsu_ai_bot</code>)를 차례로 보내요.</span></li>
+            <li><span>BotFather가 준 <b>토큰</b>(<code>123456789:AA…</code>)을 복사해서 아래에 붙여넣어요.</span></li>
+          </ol>
+          <div class="keyrow"><input id="tg-token" type="password" placeholder="봇 토큰 붙여넣기" autocomplete="off"><button class="sm" id="tg-save">확인</button></div>
+        </div>
+        <div id="tg-link" class="hidden">
+          <p><b id="tg-bot"></b> 봇을 확인했어요. 마지막으로 아래 버튼을 누르고 텔레그램에서 <b>「시작(START)」</b>을 눌러주세요.</p>
+          <a class="btn-big" id="tg-link-btn" href="#" target="_blank" rel="noopener">텔레그램에서 연결하기 ↗</a>
+          <p class="muted">연결을 기다리는 중… (이 화면은 자동으로 바뀌어요)</p>
+        </div>
+        <div id="tg-done" class="hidden">
+          <p class="ok-text" id="tg-done-text"></p>
+          <p class="muted">폰에서 그냥 말 걸면 돼요. <code>/brief</code> 지금 브리핑, <code>/todo</code> 할 일 보기. 주인으로 등록된 대화방 외에는 응답하지 않아요.</p>
+          <div class="row"><button class="sm" id="tg-test">테스트 메시지 보내기</button><button class="ghost sm danger" id="tg-off">연결 해제</button></div>
+        </div>
+        <div class="result" id="tg-result"></div>
+        </details>
+      </section>
+
+      <section class="tab hidden" data-tab="tt">
+        <p class="muted">시간표를 등록하면 브리핑에 오늘 수업이 나오고, 빈 시간을 찾을 때 수업 시간을 피해요.</p>
+        <label class="drop" id="tt-drop"><input type="file" id="tt-file" accept="image/*" hidden>
+          <span id="tt-drop-text"><b>시간표 캡처 이미지</b>를 끌어다 놓거나 클릭 — AI가 읽어서 채워줘요</span></label>
+        <div class="result" id="tt-result"></div>
+        <table class="tt"><thead><tr><th>요일</th><th>시작</th><th>끝</th><th>과목</th><th>장소</th><th></th></tr></thead><tbody id="tt-body"></tbody></table>
+        <div class="row"><button class="ghost sm" id="tt-add">+ 수업 추가</button><span class="spacer"></span><button class="sm" id="tt-save">시간표 저장</button></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- 알림함 -->
+<div class="overlay hidden" id="notif">
+  <div class="modal wide">
+    <div class="modal-head"><div><h3>알림함</h3><small class="muted">브리핑·회고·마감 알림·새 일정 후보</small></div><button class="ghost sm" id="notif-close">닫기</button></div>
+    <div class="modal-body" id="notif-list"></div>
+  </div>
+</div>
+
+<!-- 할 일 -->
+<div class="overlay hidden" id="todo">
+  <div class="modal">
+    <div class="modal-head"><div><h3>할 일</h3><small class="muted">비서에게 "할 일에 넣어줘"라고 말해도 돼요</small></div><button class="ghost sm" id="todo-close">닫기</button></div>
+    <div class="sched-bar"><input id="todo-title" placeholder="할 일 입력" class="grow"><input type="date" id="todo-due" class="w-date"><button class="sm" id="todo-add">추가</button></div>
+    <div class="modal-body"><ul class="todo-list" id="todo-list"></ul>
+      <label class="check"><input type="checkbox" id="todo-show-done"> 완료한 일도 보기</label></div>
+  </div>
+</div>
+
+<!-- 메일에서 찾은 일정 -->
+<div class="overlay hidden" id="sched">
+  <div class="modal wide">
+    <div class="modal-head"><div><h3>일정 후보</h3><small class="muted">AI가 찾은 후보예요. 확인하고 「캘린더에 추가」를 눌러야 등록돼요.</small></div><button class="ghost sm" id="sched-close">닫기</button></div>
+    <div class="sched-bar">
+      <select id="sched-days"><option value="3">최근 3일</option><option value="7" selected>최근 7일</option><option value="14">최근 14일</option><option value="30">최근 30일</option></select>
+      <button class="sm" id="sched-scan" type="button">새 메일 확인</button>
+      <button class="ghost sm" id="sched-scan-notice" type="button">학교 공지 확인</button>
+      <span class="result" id="sched-result"></span>
+    </div>
+    <div class="modal-body" id="sched-list"></div>
+    <div class="sched-foot"><a href="#" id="sched-force">이미 확인한 메일도 다시 살펴보기</a></div>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

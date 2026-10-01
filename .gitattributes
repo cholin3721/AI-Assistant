@@ -1,0 +1,8 @@
+# 윈도우 배치 파일은 CRLF, 셸 스크립트는 LF 유지
+*.bat text eol=crlf
+*.sh  text eol=lf
+*.py  text eol=lf
+*.js  text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md  text eol=lf

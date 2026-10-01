@@ -1,0 +1,6 @@
+# 개인 키·토큰 — 절대 업로드 금지
+data/
+client_secret*.json
+.venv/
+__pycache__/
+*.pyc

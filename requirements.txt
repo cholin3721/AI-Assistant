@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+google-genai>=1.30
+google-api-python-client>=2.140
+google-auth-oauthlib>=1.2
+requests>=2.32
+beautifulsoup4>=4.12
+olefile>=0.47
+pypdf>=4.0
+discord.py>=2.4
