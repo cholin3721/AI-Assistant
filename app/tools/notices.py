@@ -149,6 +149,13 @@ def read_notice_attachment(url: str) -> dict:
         url: read_school_notice 결과 attachments의 url.
     """
     from ..attachments import extract_text
+    data, name = download_attachment(url)
+    res = extract_text(data, name)
+    return {"filename": name, **res}
+
+
+def download_attachment(url: str) -> tuple:
+    """학교 공지 첨부파일을 내려받아 (바이트, 파일 이름)을 돌려줌."""
     if not url.startswith(SITE):
         raise ToolError("인하공전 홈페이지 첨부파일만 읽을 수 있어요.")
     r = requests.get(url, headers=HEADERS, timeout=20, stream=True)
@@ -158,6 +165,4 @@ def read_notice_attachment(url: str) -> dict:
         data += chunk
         if len(data) > 15_000_000:
             raise ToolError("첨부파일이 너무 커요 (15MB 초과).")
-    name = _filename_from_headers(r.headers)
-    res = extract_text(data, name)
-    return {"filename": name, **res}
+    return data, _filename_from_headers(r.headers)

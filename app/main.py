@@ -1,16 +1,19 @@
 """AI 비서 로컬 서버. 실행: python -m app.main  → 브라우저에서 http://127.0.0.1:8765"""
+import re
 import sys
 import threading
 import uuid
 import webbrowser
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from urllib.parse import quote
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (agent, config, discord_bot, google_auth, memory, notify, schedule_finder, scheduler,
-               telegram_bot, timetable, todos)
+from . import (agent, config, discord_bot, forms, google_auth, memory, notify, schedule_finder, scheduler,
+               stats, telegram_bot, timetable, todos)
 from .tools import ToolError
 
 app = FastAPI(title="인하 AI 비서")
@@ -65,6 +68,32 @@ class JobIn(BaseModel):
     job: str
 
 
+class FeedbackIn(BaseModel):
+    rating: str
+    tools: list[str] = []
+    reason: str = ""
+
+
+class FormTextIn(BaseModel):
+    text: str
+    notes: str = ""
+    use_profile: bool = True
+    style: str = "report"
+
+
+class FormNoticeIn(BaseModel):
+    attachment_url: str
+    notice_url: str = ""
+    notes: str = ""
+    use_profile: bool = True
+    style: str = "report"
+
+
+class FieldIn(BaseModel):
+    value: str = ""
+    instruction: str = ""
+
+
 class DisconnectIn(BaseModel):
     remove_client: bool = False
 
@@ -91,6 +120,7 @@ def status():
         "discord": discord_bot.status(),
         "notifications": {"unread": notify.unread()},
         "todos": {"open": len(todos.items())},
+        "forms": {"drafts": len(forms.list_drafts())},
     }
 
 
@@ -267,6 +297,108 @@ def discord_test():
 def discord_disconnect():
     discord_bot.disconnect()
     return {"ok": True}
+
+
+# ---------- 사용 통계 ----------
+@app.get("/api/stats")
+def stats_summary(days: int = 30):
+    return stats.summary(max(0, min(days, 365)))
+
+
+@app.get("/api/stats/export")
+def stats_export():
+    from datetime import datetime
+    name = f"ai-assistant-stats-{datetime.now():%Y%m%d}.json"
+    return JSONResponse(stats.export(), headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/feedback")
+def feedback(body: FeedbackIn):
+    try:
+        stats.feedback(body.rating, body.tools, body.reason)
+    except ValueError:
+        raise HTTPException(400, "평가 값이 올바르지 않아요.")
+    return {"ok": True}
+
+
+# ---------- 신청서 도우미 ----------
+def _form_call(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except (forms.FormError, ToolError) as e:
+        raise _bad(e)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, agent.friendly_error(e))
+
+
+@app.get("/api/forms")
+def forms_list():
+    return {"drafts": forms.list_drafts()}
+
+
+@app.get("/api/forms/notice_attachments")
+def forms_notice_attachments(url: str):
+    from .tools.notices import read_school_notice
+    view = read_school_notice(url=url.strip())
+    if "error" in view:
+        raise HTTPException(400, view["error"])
+    return {"title": view.get("title", ""), "attachments": view.get("attachments", [])}
+
+
+@app.post("/api/forms/upload")
+async def forms_upload(file: UploadFile = File(...), notes: str = Form(""), use_profile: bool = Form(True),
+                       style: str = Form("report")):
+    from .attachments import extract_text
+    data = await file.read()
+    if len(data) > 15_000_000:
+        raise HTTPException(400, "15MB 이하 파일만 올릴 수 있어요.")
+    res = extract_text(data, file.filename or "", max_chars=forms.MAX_FORM_CHARS)
+    if not res.get("text"):
+        raise HTTPException(400, res.get("error") or "양식을 읽지 못했어요.")
+    return _form_call(forms.create, res["text"], {"type": "upload", "name": file.filename or "양식"},
+                      notes, use_profile, style)
+
+
+@app.post("/api/forms/from_text")
+def forms_from_text(body: FormTextIn):
+    return _form_call(forms.create, body.text, {"type": "text", "name": "붙여넣은 양식"},
+                      body.notes, body.use_profile, body.style)
+
+
+@app.post("/api/forms/from_notice")
+def forms_from_notice(body: FormNoticeIn):
+    return _form_call(forms.from_notice, body.attachment_url, body.notice_url, body.notes,
+                      body.use_profile, body.style)
+
+
+@app.get("/api/forms/{did}")
+def forms_get(did: str):
+    return _form_call(forms.get, did)
+
+
+@app.put("/api/forms/{did}/fields/{fid}")
+def forms_save_field(did: str, fid: str, body: FieldIn):
+    return _form_call(forms.save_field, did, fid, body.value)
+
+
+@app.post("/api/forms/{did}/fields/{fid}/rewrite")
+def forms_rewrite(did: str, fid: str, body: FieldIn):
+    return _form_call(forms.rewrite, did, fid, body.instruction)
+
+
+@app.delete("/api/forms/{did}")
+def forms_delete(did: str):
+    return {"ok": forms.delete(did)}
+
+
+@app.get("/api/forms/{did}/docx")
+def forms_docx(did: str):
+    d = _form_call(forms.get, did)
+    name = re.sub(r'[\\/:*?"<>|]', "", d["title"])[:60] or "신청서"
+    return Response(forms.to_docx(d), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": f"attachment; filename=\"draft.docx\"; filename*=UTF-8''{quote(name + '_초안.docx')}"})
 
 
 # ---------- 할 일 ----------

@@ -10,6 +10,8 @@
 <svg width="0" height="0" style="position:absolute">
   <symbol id="i-bell" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7 10v11M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.3 7A2 2 0 0 1 17.5 21H7V10l4.3-7.4A1.7 1.7 0 0 1 15 5.9Z"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 14V3M9 18.1l1-4.1H4.2a2 2 0 0 1-1.9-2.6l2.3-7A2 2 0 0 1 6.5 3H17v11l-4.3 7.4A1.7 1.7 0 0 1 9 18.1Z"/></symbol>
   <symbol id="i-speaker" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M11 5 6 9H2v6h4l5 4V5ZM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></symbol>
 </svg>
 <div id="app">
@@ -30,6 +32,7 @@
       <h4>챙길 것</h4>
       <button class="sched-btn" id="btn-sched" type="button"><span>일정 후보</span><span class="badge hidden" id="sched-badge">0</span></button>
       <button class="sched-btn" id="btn-todo" type="button"><span>할 일</span><span class="count" id="todo-count">0</span></button>
+      <button class="sched-btn" id="btn-forms" type="button"><span>신청서 도우미</span><span class="count" id="forms-count">0</span></button>
       <small class="sched-meta" id="sched-meta"></small>
     </section>
 
@@ -45,6 +48,7 @@
 
     <div class="side-bottom">
       <button class="ghost" id="btn-new">새 대화</button>
+      <button class="ghost" id="btn-stats">리포트</button>
       <button class="ghost" id="btn-settings">설정</button>
     </div>
   </aside>
@@ -59,7 +63,7 @@
           <button class="ex" data-q="교수님한테 온 메일 있어? 있으면 요약하고 답장 초안 만들어줘">교수님 메일 확인하고 답장 초안 만들어줘</button>
           <button class="ex" data-q="AID 아이디어 공모전 신청하려면 뭐 해야 돼? 체크리스트 만들어줘">공모전 신청 체크리스트 만들어줘</button>
           <button class="ex" data-q="다음 주에 팀플 회의 2시간 할 수 있는 시간 추천해줘">다음 주 팀플 회의 시간 추천해줘</button>
-          <button class="ex" data-q="기억해: 내 캡스톤 지도교수님은 김철수 교수님이고 메일은 kim@inhatc.ac.kr이야">지도교수님 정보 기억해줘</button>
+          <button class="ex" data-q="AID 아이디어 공모전 공지에 있는 참가신청서·출품보고서 양식으로 초안 만들어줘">공모전 신청서 초안 써줘</button>
         </div>
       </div>
     </div>
@@ -349,6 +353,77 @@
   </div>
 </div>
 
+
+<!-- 신청서 도우미 -->
+<div class="overlay hidden" id="forms">
+  <div class="modal xwide">
+    <div class="modal-head"><div><h3>신청서 도우미</h3><small class="muted">양식을 넣으면 항목별 초안을 써줘요. 학번·연락처 같은 개인정보는 지어내지 않고 빈칸으로 남겨요.</small></div><button class="ghost sm" id="forms-close">닫기</button></div>
+    <div class="forms-wrap">
+      <aside class="forms-side">
+        <button class="sm" id="fm-new" type="button">+ 새 초안</button>
+        <ul id="fm-list"></ul>
+      </aside>
+      <section class="forms-main">
+        <div id="fm-create">
+          <h4>1. 양식 넣기</h4>
+          <nav class="seg" id="fm-src">
+            <button data-src="file" class="on" type="button">파일 올리기</button><button data-src="notice" type="button">학교 공지에서</button><button data-src="text" type="button">글자 붙여넣기</button>
+          </nav>
+          <div data-pane="file">
+            <label class="drop" id="fm-drop"><input type="file" id="fm-file" accept=".hwp,.hwpx,.docx,.pdf,.txt" hidden>
+              <span id="fm-drop-text"><b>신청서·보고서 양식</b>(hwp·hwpx·docx·pdf)을 끌어다 놓거나 클릭</span></label>
+          </div>
+          <div data-pane="notice" class="hidden">
+            <div class="keyrow"><input id="fm-notice-url" placeholder="학교 공지 주소 붙여넣기 (https://www.inhatc.ac.kr/…)"><button class="sm" id="fm-notice-load" type="button">첨부 불러오기</button></div>
+            <div id="fm-att-list" class="att-list"></div>
+          </div>
+          <div data-pane="text" class="hidden">
+            <textarea id="fm-text" rows="6" placeholder="양식 내용을 그대로 붙여넣어 주세요 (항목 이름이 보이면 돼요)"></textarea>
+          </div>
+          <h4>2. 참고 자료 <span class="opt">많이 쓸수록 초안이 좋아져요</span></h4>
+          <textarea id="fm-notes" rows="6" placeholder="예) 작품명: 인하 AI 비서 / 팀: 김민수(개발), 이지은(디자인) / 아이디어: 학생이 놓치는 공지·마감을 먼저 챙겨주는 개인 비서 / 강조할 점: 내 PC에서만 동작해 개인정보 안전 …"></textarea>
+          <div class="row opts">
+            <label class="check"><input type="checkbox" id="fm-use-profile" checked> 내 정보·비서가 기억하는 것 사용</label>
+            <select id="fm-style"><option value="report">보고서체 (~함, 개조식)</option><option value="prose">서술형 (~합니다)</option></select>
+            <span class="spacer"></span>
+            <button id="fm-make" type="button">초안 만들기</button>
+          </div>
+          <div class="result" id="fm-result"></div>
+        </div>
+        <div id="fm-view" class="hidden">
+          <div class="fm-head">
+            <div class="grow"><h3 id="fm-title"></h3><small class="muted" id="fm-meta"></small></div>
+            <button class="ghost sm" id="fm-copy-all" type="button">전체 복사</button>
+            <a class="btn-sm" id="fm-docx" href="#" download>워드로 저장</a>
+            <button class="ghost sm danger" id="fm-del" type="button">삭제</button>
+          </div>
+          <div class="missing hidden" id="fm-missing"></div>
+          <div id="fm-fields"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- 사용 리포트 -->
+<div class="overlay hidden" id="stats">
+  <div class="modal wide">
+    <div class="modal-head"><div><h3>사용 리포트</h3><small class="muted">비서가 한 일을 횟수로만 세요. 메일·공지·대화 내용은 저장하지 않아요.</small></div>
+      <div class="row"><select id="st-period"><option value="7">최근 7일</option><option value="30" selected>최근 30일</option><option value="0">전체</option></select><button class="ghost sm" id="stats-close">닫기</button></div></div>
+    <div class="modal-body">
+      <div class="kpis" id="st-kpi"></div>
+      <h4>최근 14일 하루 활동 <span class="muted">(대화 + 비서가 먼저 한 일)</span></h4>
+      <div class="chart" id="st-chart"></div>
+      <h4>많이 쓴 기능</h4>
+      <ol class="rank" id="st-tools"></ol>
+      <details class="trouble"><summary>아낀 시간은 어떻게 계산하나요?</summary><p class="muted">직접 했다면 걸렸을 시간을 아래처럼 잡아 더한 <b>추정치</b>예요.</p><ul id="st-assume"></ul></details>
+      <div id="st-feedback"></div>
+      <div class="row"><a class="btn-sm" id="st-export" href="/api/stats/export" download>통계 내보내기 (익명 JSON)</a>
+        <span class="muted">베타 테스트 결과 제출용 · 이름·이메일·메일 내용은 들어가지 않아요 (남긴 의견은 포함)</span></div>
+    </div>
+  </div>
+</div>
+<div class="tip hidden" id="chart-tip"></div>
 <div class="toast hidden" id="toast"></div>
 <script src="/static/app.js"></script>
 </body>

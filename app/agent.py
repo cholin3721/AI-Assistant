@@ -17,6 +17,7 @@ from .tools.gcalendar import create_calendar_event, list_calendar_events
 from .tools.gmail import create_email_draft, read_email, read_email_attachment, search_emails
 from .tools.notices import get_school_notices, read_notice_attachment, read_school_notice
 from .tools.schedule import find_events_in_emails, find_events_in_notices
+from .forms import draft_application
 
 KST = timezone(timedelta(hours=9))
 PREFERRED_MODELS = [
@@ -24,7 +25,8 @@ PREFERRED_MODELS = [
     "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.5-flash-lite",
 ]
 LOCAL_TOOLS = [get_school_notices, read_school_notice, read_notice_attachment, find_events_in_notices,
-               remember, forget, add_todo, list_todos, complete_todo, get_timetable, find_free_time]
+               remember, forget, add_todo, list_todos, complete_todo, get_timetable, find_free_time,
+               draft_application]
 GOOGLE_TOOLS = [search_emails, read_email, read_email_attachment, create_email_draft,
                 find_unanswered_emails, find_awaiting_replies,
                 list_calendar_events, create_calendar_event, find_events_in_emails,
@@ -135,8 +137,11 @@ def _system_prompt() -> str:
    "민수한테 메일 써줘"처럼 사람이 나오면 [기억하고 있는 것]에서 연락처를 먼저 찾고, 없으면 메일 검색으로 찾아.
 8. "언제 시간 돼?", "회의 잡을 시간" 같은 질문은 find_free_time으로 캘린더+시간표의 빈 시간을 찾아 2~4개 추천해.
 9. 답장할 메일·회신 대기 메일은 find_unanswered_emails / find_awaiting_replies로 찾고, 원하면 초안까지 만들어.
-10. 답변은 한국어, 핵심 먼저, 마크다운 목록으로 짧게. 공지·파일·일정·메일은 링크를 [제목](URL) 형태로 달아줘.
-11. 개인정보(메일 내용 등)는 사용자가 물어본 범위에서만 요약해.
+10. 신청서·보고서·참가신청서를 써달라고 하면 공지의 양식 첨부를 찾아 draft_application으로 초안을 만들고,
+   직접 채워야 할 항목(학번·연락처 등)을 알려준 뒤 화면 왼쪽 '신청서 도우미'에서 고치고 저장하라고 안내해.
+   사용자가 대화에서 말한 아이디어·팀 정보는 notes에 담아. 학번·연락처 같은 개인정보는 절대 지어내지 마.
+11. 답변은 한국어, 핵심 먼저, 마크다운 목록으로 짧게. 공지·파일·일정·메일은 링크를 [제목](URL) 형태로 달아줘.
+12. 개인정보(메일 내용 등)는 사용자가 물어본 범위에서만 요약해.
 """
 
 
@@ -187,6 +192,9 @@ def chat(session_id: str, message: str) -> dict:
         except Exception as e:
             raise AgentError(friendly_error(e))
         sess["turns"] += 1
+    from . import stats
+    channel = "task" if session_id.startswith("task-") else session_id if session_id in ("discord", "telegram") else "web"
+    stats.record(f"chat:{channel}")
     text = resp.text or ""
     if not text.strip():
         text = "응답을 만들지 못했어요. 질문을 조금 바꿔서 다시 해볼래요?"

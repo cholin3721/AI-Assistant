@@ -204,6 +204,9 @@ def _make_candidates(extracted: list, meta: dict, data: dict) -> list:
         data["candidates"][cid] = cand
         if not dup:
             new.append(cand)
+    from . import stats
+    for src_type in ("mail", "notice"):
+        stats.record(f"candidate_found:{src_type}", sum(1 for c in new if c["source"] == src_type))
     return new
 
 
@@ -369,6 +372,8 @@ def add_to_calendar(cid: str, edits: dict | None = None) -> dict:
         raise ScanError(res["error"])
     c["status"], c["calendar_link"] = "added", res.get("link", "")
     _save(data)
+    from . import stats
+    stats.record("candidate_added")
     return c
 
 
@@ -379,6 +384,8 @@ def ignore(cid: str) -> dict:
         raise ScanError("후보를 찾을 수 없어요.")
     c["status"] = "ignored"
     _save(data)
+    from . import stats
+    stats.record("candidate_ignored")
     return c
 
 

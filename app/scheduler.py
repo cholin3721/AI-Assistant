@@ -71,9 +71,9 @@ def _ready() -> bool:
 
 
 # ---------- 작업들 ----------
-def run_briefing(manual: bool = False) -> str:
+def run_briefing(manual: bool = False, now: datetime | None = None) -> str:
     from . import agent
-    now = datetime.now(KST)
+    now = now or datetime.now(KST)
     if not _ready():
         return "Gemini 키가 없어 브리핑을 만들 수 없어요."
     try:
@@ -90,9 +90,9 @@ def run_briefing(manual: bool = False) -> str:
     return text
 
 
-def run_weekly(manual: bool = False) -> str:
+def run_weekly(manual: bool = False, now: datetime | None = None) -> str:
     from . import agent
-    now = datetime.now(KST)
+    now = now or datetime.now(KST)
     if not _ready():
         return "Gemini 키가 없어 회고를 만들 수 없어요."
     try:
@@ -220,10 +220,10 @@ def tick(now: datetime | None = None):
     t = time.time()
 
     if auto.get("briefing") and due_daily(now, auto.get("briefing_time", "08:00"), st.get("last_briefing", "")):
-        run_briefing()
+        run_briefing(now=now)
     if auto.get("weekly") and due_weekly(now, auto.get("weekly_day", 4), auto.get("weekly_time", "18:00"),
                                          st.get("last_weekly", "")):
-        run_weekly()
+        run_weekly(now=now)
     if auto.get("reminders") and t - st.get("last_reminder", 0) >= REMIND_EVERY:
         _set(last_reminder=t)
         run_reminders(now)

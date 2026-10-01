@@ -207,3 +207,84 @@ table.tt td:nth-child(1){width:84px}table.tt td:nth-child(2),table.tt td:nth-chi
 hr.sep{border:0;border-top:1px solid var(--line);margin:22px 0 14px}
 details.msgr summary{cursor:pointer;padding:6px 0}
 details.msgr[open] summary{margin-bottom:8px}
+
+/* 답변 평가 */
+.fb{display:flex;gap:4px;align-items:center;margin-top:8px}
+.fb button{background:transparent;color:var(--muted);padding:4px 6px;border-radius:8px}
+.fb button:hover{color:var(--accent);background:var(--accent-weak)}
+.fb button.on{color:var(--accent)}
+.fb .ic{width:16px;height:16px}
+.fb input{padding:5px 9px;font-size:13px;width:220px}
+.fb small{color:var(--muted);font-size:12px}
+.side-bottom button{padding:10px 6px}
+
+/* 신청서 도우미 */
+.modal.xwide{width:min(1080px,100%);height:calc(100vh - 32px)}
+.forms-wrap{display:flex;flex:1;min-height:0}
+.forms-side{width:220px;flex-shrink:0;border-right:1px solid var(--line);padding:14px;overflow-y:auto}
+.forms-side button{width:100%}
+.forms-side ul{list-style:none;padding:0;margin:12px 0 0}
+.forms-side li{padding:9px 10px;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:4px}
+.forms-side li:hover{background:var(--accent-weak)}
+.forms-side li.on{background:var(--accent-weak);color:var(--accent);font-weight:700}
+.forms-side li small{display:block;color:var(--muted);font-weight:400;font-size:12px}
+.forms-main{flex:1;min-width:0;overflow-y:auto;padding:6px 24px 24px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:10px}
+.seg button{background:transparent;color:var(--muted);border-radius:0;padding:8px 14px;font-weight:600}
+.seg button.on{background:var(--accent);color:#fff}
+.att-list label{display:flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin:6px 0;font-size:14px;cursor:pointer}
+.att-list input{width:auto}
+.opts{align-items:center;margin-top:10px}
+.opts select{width:auto}
+.fm-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid var(--line);position:sticky;top:-6px;background:var(--panel);z-index:1}
+.fm-head h3{margin:0}
+.btn-sm{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:7px 12px;border-radius:10px}
+.missing{margin:12px 0;padding:10px 14px;border-radius:10px;font-size:14px;background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}
+.field{border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:12px 0}
+.field-top{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.field-top b{font-size:15px}
+.sec{font-size:11px;font-weight:700;color:var(--muted);background:var(--code);padding:1px 7px;border-radius:999px}
+.guide{font-size:13px;color:var(--muted);margin:4px 0 6px}
+.field textarea{resize:vertical;min-height:44px;line-height:1.6}
+.field textarea.short{min-height:42px}
+.field-foot{display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap}
+.field-foot .cnt{font-size:12px;color:var(--muted)}
+.field-foot .cnt.over{color:var(--bad);font-weight:700}
+.field-note{font-size:12px;color:var(--muted);margin-top:4px}
+.rw{display:flex;gap:6px;flex:1;min-width:260px}
+.rw input{padding:6px 10px;font-size:13px}
+@media (max-width:760px){.forms-wrap{flex-direction:column}.forms-side{width:auto;border-right:0;border-bottom:1px solid var(--line)}}
+
+/* 사용 리포트 */
+:root{--chart:#1f5fd1}
+@media (prefers-color-scheme:dark){:root{--chart:#4f86f0}}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:8px 0 6px}
+.kpi{border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.kpi .v{font-size:26px;font-weight:800;line-height:1.2;font-variant-numeric:tabular-nums}
+.kpi .l{font-size:13px;color:var(--muted)}
+.kpi .s{font-size:12px;color:var(--muted)}
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart .axis{fill:var(--muted);font-size:11px}
+.chart .bar{fill:var(--chart)}
+.chart .hit{fill:transparent;cursor:default}
+.chart .hit:hover+.bar,.chart g:hover .bar{opacity:.8}
+.tip{position:fixed;pointer-events:none;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:13px;box-shadow:var(--shadow);z-index:30}
+.tip b{display:block}
+.rank{margin:4px 0 10px;padding-left:1.4em;font-size:14px}
+.rank li{margin:3px 0}
+.rank span{color:var(--muted);font-variant-numeric:tabular-nums}
+@media (max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
+
+/* 촘촘하게: 사이드바가 노트북 화면(높이 800~900px)에 다 들어가도록 */
+.side{gap:14px;padding:16px 14px}
+.conn{padding:6px 10px;margin-bottom:5px}
+.conn small{font-size:11.5px}
+.quick{padding:7px 12px;margin-bottom:5px;font-size:14px}
+.sched-btn{padding:8px 12px;margin-bottom:5px}
+.block h4{margin-bottom:6px}
+.rw button,.field-foot button{white-space:nowrap}
+.modal-head .row{flex-wrap:nowrap;align-items:center}
+.modal-head .row select{width:auto}
+.side-bottom{position:sticky;bottom:-16px;background:var(--side);padding:8px 0 16px;margin-bottom:-16px}

@@ -40,7 +40,11 @@ def add(title: str, due: str = "", note: str = "", link: str = "") -> dict:
                 return x
         d["items"].append(item)
         return item
-    return store.update("todos", DEFAULT, fn)
+    res = store.update("todos", DEFAULT, fn)
+    if res is item:
+        from . import stats
+        stats.record("todo_added")
+    return res
 
 
 def set_done(tid: str, done: bool = True) -> dict | None:
@@ -50,7 +54,11 @@ def set_done(tid: str, done: bool = True) -> dict | None:
                 x["done"] = done
                 x["done_at"] = time.time() if done else None
                 return x
-    return store.update("todos", DEFAULT, fn)
+    res = store.update("todos", DEFAULT, fn)
+    if res and done:
+        from . import stats
+        stats.record("todo_done")
+    return res
 
 
 def delete(tid: str) -> bool:

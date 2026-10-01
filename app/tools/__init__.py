@@ -38,6 +38,10 @@ def tool(label: str):
             except Exception as e:  # 네트워크·권한 오류 등
                 entry["ok"] = False
                 return {"error": f"{type(e).__name__}: {e}"}
+            finally:
+                if entry["ok"]:
+                    from .. import stats
+                    stats.record(f"tool:{fn.__name__}")
         return wrapper
     return deco
 

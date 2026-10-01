@@ -117,7 +117,7 @@ def pdf_text(data: bytes) -> str:
     return _clean("\n".join((page.extract_text() or "") for page in reader.pages[:30]))
 
 
-def extract_text(data: bytes, filename: str = "") -> dict:
+def extract_text(data: bytes, filename: str = "", max_chars: int = MAX_CHARS) -> dict:
     """파일 내용(바이트)을 보고 형식을 판별해 텍스트를 추출. 파일 이름보다 실제 내용을 우선."""
     name = filename.lower()
     try:
@@ -135,5 +135,5 @@ def extract_text(data: bytes, filename: str = "") -> dict:
         return {"kind": "error", "text": "", "error": f"파일을 읽지 못했어요: {e}"}
     if not text:
         return {"kind": kind, "text": "", "error": "글자를 찾지 못했어요 (스캔 이미지로 된 문서일 수 있어요)."}
-    cut = len(text) > MAX_CHARS
-    return {"kind": kind, "text": text[:MAX_CHARS] + ("\n…(이하 생략)" if cut else ""), "truncated": cut}
+    cut = len(text) > max_chars
+    return {"kind": kind, "text": text[:max_chars] + ("\n…(이하 생략)" if cut else ""), "truncated": cut}

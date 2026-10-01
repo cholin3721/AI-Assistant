@@ -16,6 +16,8 @@ def add(kind: str, title: str, body: str, link: str = "", push: bool = True) -> 
         d["items"].insert(0, n)
         del d["items"][100:]
     store.update("notifications", DEFAULT, fn)
+    from . import stats
+    stats.record(f"notify:{kind}")
     if push:
         from . import discord_bot, telegram_bot
         text = f"**{title}**\n\n{body}" + (f"\n\n{link}" if link else "")

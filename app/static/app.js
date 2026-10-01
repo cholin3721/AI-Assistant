@@ -77,6 +77,7 @@ async function refreshStatus() {
   updateSchedBadge();
   updateBell();
   $("#todo-count").textContent = state.todos.open;
+  $("#forms-count").textContent = state.forms.drafts;
   return state;
 }
 
@@ -110,10 +111,12 @@ async function send(text) {
   try {
     const r = await api("/api/chat", { method: "POST", body: { session_id: sessionId, message: text } });
     typing.remove();
-    addMsg("bot", md(r.reply), r.tools);
+    const botEl = addMsg("bot", md(r.reply), r.tools);
+    addFeedback(botEl, r.tools);
     speak(r.reply);
     const used = (n) => (r.tools || []).some((t) => t.name === n && t.ok);
     if (used("find_events_in_emails") || used("find_events_in_notices")) openSched(false);
+    if (used("draft_application")) openForms(true);
   } catch (e) {
     typing.remove();
     addMsg("error", esc(e.message));
@@ -707,6 +710,220 @@ $("#mic").addEventListener("click", () => {
   try { speechSynthesis.cancel(); } catch (_) {}
   rec.start(); recOn = true; $("#mic").classList.add("rec");
 });
+
+/* ---------- 답변 평가 ---------- */
+const ICON = (n) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+function addFeedback(wrap, tools) {
+  const names = [...new Set((tools || []).map((t) => t.name))];
+  const box = document.createElement("div"); box.className = "fb";
+  box.innerHTML = `<button title="도움이 됐어요" data-r="up">${ICON("up")}</button><button title="아쉬워요" data-r="down">${ICON("down")}</button>`;
+  const sendFb = async (rating, reason = "") => {
+    try { await api("/api/feedback", { method: "POST", body: { rating, tools: names, reason } }); } catch (_) {}
+  };
+  box.querySelector('[data-r="up"]').addEventListener("click", async () => {
+    await sendFb("up"); box.innerHTML = "<small>고마워요! 평가가 리포트에 반영돼요.</small>";
+  });
+  box.querySelector('[data-r="down"]').addEventListener("click", () => {
+    box.innerHTML = `<input placeholder="뭐가 아쉬웠나요? (선택)" maxlength="200"><button class="sm" type="button">보내기</button>`;
+    const inp = box.querySelector("input"); inp.focus();
+    const go = async () => { await sendFb("down", inp.value); box.innerHTML = "<small>의견 고마워요. 더 나아지게 할게요.</small>"; };
+    box.querySelector("button").addEventListener("click", go);
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) go(); });
+  });
+  wrap.querySelector(".bubble").appendChild(box);
+}
+
+/* ---------- 신청서 도우미 ---------- */
+let fmSrc = "file", fmFile = null, fmCurrent = null;
+async function loadFormList(selectId) {
+  const r = await api("/api/forms");
+  const ul = $("#fm-list"); ul.innerHTML = "";
+  if (!r.drafts.length) ul.innerHTML = '<li class="muted">아직 초안이 없어요</li>';
+  r.drafts.forEach((d) => {
+    const li = document.createElement("li");
+    const t = new Date(d.created * 1000);
+    li.innerHTML = `${esc(d.title)}<small>${t.getMonth() + 1}/${t.getDate()} · 항목 ${d.fields}개${d.missing ? ` · 빈칸 ${d.missing}` : ""}</small>`;
+    li.dataset.id = d.id;
+    li.addEventListener("click", () => showDraft(d.id));
+    ul.appendChild(li);
+  });
+  return r.drafts;
+}
+function fmShowCreate() {
+  fmCurrent = null;
+  $("#fm-create").classList.remove("hidden"); $("#fm-view").classList.add("hidden");
+  $$("#fm-list li").forEach((li) => li.classList.remove("on"));
+}
+async function openForms(latest = false) {
+  $("#forms").classList.remove("hidden");
+  const drafts = await loadFormList();
+  if (latest && drafts.length) showDraft(drafts[0].id); else if (!fmCurrent) fmShowCreate();
+}
+$("#btn-forms").addEventListener("click", () => openForms(false));
+$("#forms-close").addEventListener("click", () => $("#forms").classList.add("hidden"));
+$("#fm-new").addEventListener("click", fmShowCreate);
+$$("#fm-src button").forEach((b) => b.addEventListener("click", () => {
+  fmSrc = b.dataset.src;
+  $$("#fm-src button").forEach((x) => x.classList.toggle("on", x === b));
+  $$("#fm-create [data-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== fmSrc));
+}));
+function fmSetFile(f) {
+  if (!f) return; fmFile = f;
+  $("#fm-drop").classList.add("done"); $("#fm-drop-text").innerHTML = `<b>${esc(f.name)}</b> · 바꾸려면 다시 올리세요`;
+}
+$("#fm-file").addEventListener("change", (e) => fmSetFile(e.target.files[0]));
+const fmDrop = $("#fm-drop");
+["dragenter", "dragover"].forEach((ev) => fmDrop.addEventListener(ev, (e) => { e.preventDefault(); fmDrop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => fmDrop.addEventListener(ev, (e) => { e.preventDefault(); fmDrop.classList.remove("over"); }));
+fmDrop.addEventListener("drop", (e) => fmSetFile(e.dataTransfer.files[0]));
+$("#fm-notice-load").addEventListener("click", async () => {
+  const url = $("#fm-notice-url").value.trim(); const box = $("#fm-att-list");
+  if (!url) return; box.innerHTML = '<p class="muted">불러오는 중…</p>';
+  try {
+    const r = await api(`/api/forms/notice_attachments?url=${encodeURIComponent(url)}`);
+    if (!r.attachments.length) { box.innerHTML = '<p class="muted">이 공지에는 첨부파일이 없어요.</p>'; return; }
+    box.innerHTML = `<p class="muted">${esc(r.title)} — 양식 파일을 골라주세요</p>` + r.attachments.map((a, i) =>
+      `<label><input type="radio" name="fm-att" value="${esc(a.url)}" ${i === 0 ? "checked" : ""}>${esc(a.name)}</label>`).join("");
+  } catch (e) { box.innerHTML = `<p class="result bad">${esc(e.message)}</p>`; }
+});
+$("#fm-make").addEventListener("click", async () => {
+  const out = $("#fm-result"), btn = $("#fm-make");
+  const notes = $("#fm-notes").value, use_profile = $("#fm-use-profile").checked, style = $("#fm-style").value;
+  let req;
+  if (fmSrc === "file") {
+    if (!fmFile) return setResult(out, "bad", "양식 파일을 올려주세요.");
+    const fd = new FormData(); fd.append("file", fmFile); fd.append("notes", notes); fd.append("use_profile", use_profile); fd.append("style", style);
+    req = api("/api/forms/upload", { method: "POST", body: fd });
+  } else if (fmSrc === "notice") {
+    const sel = document.querySelector('input[name="fm-att"]:checked');
+    if (!sel) return setResult(out, "bad", "공지 주소를 넣고 「첨부 불러오기」로 양식을 골라주세요.");
+    req = api("/api/forms/from_notice", { method: "POST", body: { attachment_url: sel.value, notice_url: $("#fm-notice-url").value.trim(), notes, use_profile, style } });
+  } else {
+    const text = $("#fm-text").value.trim();
+    if (!text) return setResult(out, "bad", "양식 내용을 붙여넣어 주세요.");
+    req = api("/api/forms/from_text", { method: "POST", body: { text, notes, use_profile, style } });
+  }
+  btn.disabled = true; setResult(out, "wait", "양식을 읽고 항목별 초안을 쓰는 중… (20~60초)");
+  try { const d = await req; setResult(out, "", ""); await loadFormList(); renderDraft(d); refreshStatus(); }
+  catch (e) { setResult(out, "bad", e.message); }
+  finally { btn.disabled = false; }
+});
+async function showDraft(id) {
+  try { renderDraft(await api(`/api/forms/${id}`)); } catch (e) { toast(e.message); }
+}
+function draftText(d) {
+  let out = `${d.title}\n\n`, sec = null;
+  d.fields.forEach((f) => {
+    if (f.section && f.section !== sec) { sec = f.section; out += `■ ${sec}\n\n`; }
+    out += `[${f.label}]\n${f.value || ""}\n\n`;
+  });
+  return out.trim() + "\n";
+}
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); toast("복사했어요"); }
+  catch (_) { const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("복사했어요"); }
+}
+function updateMissing(d) {
+  const all = [...new Set(d.fields.flatMap((f) => f.missing))];
+  const box = $("#fm-missing");
+  box.classList.toggle("hidden", !all.length);
+  box.innerHTML = all.length ? `<b>직접 채워야 할 것</b> · ${all.map(esc).join(", ")} <span class="muted">(초안에 [○○ 입력]으로 표시돼 있어요)</span>` : "";
+}
+function renderDraft(d) {
+  fmCurrent = d;
+  $("#fm-create").classList.add("hidden"); $("#fm-view").classList.remove("hidden");
+  $$("#fm-list li").forEach((li) => li.classList.toggle("on", li.dataset.id === d.id));
+  $("#fm-title").textContent = d.title;
+  const t = new Date(d.created * 1000);
+  $("#fm-meta").textContent = `${d.source?.name || ""} · ${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")} · 항목 ${d.fields.length}개 · 고친 내용은 자동 저장돼요`;
+  $("#fm-docx").href = `/api/forms/${d.id}/docx`;
+  updateMissing(d);
+  const box = $("#fm-fields"); box.innerHTML = "";
+  d.fields.forEach((f) => {
+    const el = document.createElement("div"); el.className = "field";
+    el.innerHTML = `<div class="field-top">${f.section ? `<span class="sec">${esc(f.section)}</span>` : ""}<b>${esc(f.label)}</b></div>
+      ${f.guidance ? `<div class="guide">${esc(f.guidance)}</div>` : ""}
+      <textarea class="${f.kind === "short" ? "short" : ""}" rows="${f.kind === "short" ? 1 : 5}">${esc(f.value)}</textarea>
+      ${f.note ? `<div class="field-note">메모: ${esc(f.note)}</div>` : ""}
+      <div class="field-foot"><span class="cnt"></span><button class="ghost sm" data-a="copy" type="button">복사</button>
+        <div class="rw"><input placeholder="다시 쓰기 요청 (예: 더 짧게, 기대효과 강조)"><button class="ghost sm" data-a="rw" type="button">다시 쓰기</button></div></div>`;
+    const ta = el.querySelector("textarea"), cnt = el.querySelector(".cnt");
+    const count = () => { const n = ta.value.length; cnt.textContent = f.max_chars ? `${n} / ${f.max_chars}자` : `${n}자`; cnt.classList.toggle("over", !!f.max_chars && n > f.max_chars); };
+    const fit = () => { if (f.kind !== "short") { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight + 2, 520) + "px"; } };
+    count(); setTimeout(fit, 0);
+    ta.addEventListener("input", () => { count(); fit(); });
+    ta.addEventListener("change", async () => {
+      try { const nf = await api(`/api/forms/${d.id}/fields/${f.id}`, { method: "PUT", body: { value: ta.value } }); Object.assign(f, nf); updateMissing(d); }
+      catch (e) { toast(e.message); }
+    });
+    el.querySelector('[data-a="copy"]').addEventListener("click", () => copyText(ta.value));
+    el.querySelector('[data-a="rw"]').addEventListener("click", async (e) => {
+      const b = e.target, inp = el.querySelector(".rw input");
+      b.disabled = true; b.textContent = "쓰는 중…";
+      try {
+        const nf = await api(`/api/forms/${d.id}/fields/${f.id}/rewrite`, { method: "POST", body: { instruction: inp.value } });
+        Object.assign(f, nf); ta.value = nf.value; count(); fit(); inp.value = ""; updateMissing(d); toast("다시 썼어요");
+      } catch (err) { toast(err.message); }
+      finally { b.disabled = false; b.textContent = "다시 쓰기"; }
+    });
+    box.appendChild(el);
+  });
+}
+$("#fm-copy-all").addEventListener("click", () => fmCurrent && copyText(draftText(fmCurrent)));
+$("#fm-del").addEventListener("click", async () => {
+  if (!fmCurrent) return;
+  await api(`/api/forms/${fmCurrent.id}`, { method: "DELETE" });
+  toast("초안을 지웠어요"); await loadFormList(); fmShowCreate(); refreshStatus();
+});
+
+/* ---------- 사용 리포트 ---------- */
+function kpiTile(v, l, s = "") { return `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`; }
+function fmtMinutes(m) { if (m < 60) return `${m}분`; const h = Math.floor(m / 60), r = m % 60; return r ? `${h}시간 ${r}분` : `${h}시간`; }
+function renderChart(rows) {
+  const W = 640, H = 180, P = { l: 28, r: 8, t: 10, b: 24 };
+  const vals = rows.map((r) => r.chats + r.auto);
+  const max = Math.max(4, ...vals), step = Math.ceil(max / 4);
+  const top = step * 4, iw = W - P.l - P.r, ih = H - P.t - P.b, bw = iw / rows.length, barW = Math.min(26, bw - 6);
+  const y = (v) => P.t + ih - (v / top) * ih;
+  let g = "";
+  for (let i = 0; i <= 4; i++) { const v = step * i, yy = y(v); g += `<line class="grid" x1="${P.l}" x2="${W - P.r}" y1="${yy}" y2="${yy}"/><text class="axis" x="${P.l - 6}" y="${yy + 4}" text-anchor="end">${v}</text>`; }
+  rows.forEach((r, i) => {
+    const v = vals[i], x = P.l + i * bw + (bw - barW) / 2, yy = y(v), h = P.t + ih - yy;
+    const [, m, d] = r.day.split("-").map(Number);
+    let bar = "";
+    if (v > 0) { const rr = Math.min(4, h, barW / 2); bar = `<path class="bar" d="M${x},${P.t + ih} V${yy + rr} Q${x},${yy} ${x + rr},${yy} H${x + barW - rr} Q${x + barW},${yy} ${x + barW},${yy + rr} V${P.t + ih} Z"/>`; }
+    g += `<g data-i="${i}"><rect class="hit" x="${P.l + i * bw}" y="${P.t}" width="${bw}" height="${ih}"/>${bar}</g>`;
+    if ((rows.length - 1 - i) % 3 === 0) g += `<text class="axis" x="${x + barW / 2}" y="${H - 6}" text-anchor="middle">${m}/${d}</text>`;
+  });
+  $("#st-chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="최근 14일 하루 활동 수">${g}</svg>`;
+  const tip = $("#chart-tip");
+  $$("#st-chart g[data-i]").forEach((el) => {
+    el.addEventListener("mousemove", (e) => {
+      const r = rows[+el.dataset.i], [, m, d] = r.day.split("-").map(Number);
+      tip.innerHTML = `<b>${m}월 ${d}일 · ${r.chats + r.auto}건</b>대화 ${r.chats} · 비서가 먼저 한 일 ${r.auto}`;
+      tip.style.left = Math.min(e.clientX + 14, innerWidth - 220) + "px"; tip.style.top = e.clientY + 14 + "px"; tip.classList.remove("hidden");
+    });
+    el.addEventListener("mouseleave", () => tip.classList.add("hidden"));
+  });
+}
+async function loadStats() {
+  const r = await api(`/api/stats?days=${$("#st-period").value}`), k = r.kpi;
+  const sat = k.satisfaction === null ? "–" : `${k.satisfaction}%`;
+  $("#st-kpi").innerHTML =
+    kpiTile(k.chats, "비서와 대화", Object.entries(k.chats_by_channel).map(([c, n]) => `${({ web: "화면", discord: "디스코드", telegram: "텔레그램", task: "자동" })[c] || c} ${n}`).join(" · ")) +
+    kpiTile(k.reminders + k.briefings, "먼저 챙겨준 알림", `마감 알림 ${k.reminders} · 브리핑·회고 ${k.briefings}`) +
+    kpiTile(k.candidates_found, "찾아준 일정 후보", `캘린더 추가 ${k.candidates_added}`) +
+    kpiTile(k.email_drafts + k.form_drafts, "써준 초안", `메일 ${k.email_drafts} · 신청서 ${k.form_drafts}`) +
+    kpiTile(sat, "답변 만족도", k.feedback_total ? `평가 ${k.feedback_total}회 중 좋아요 ${k.feedback_up}` : "답변 아래 버튼으로 평가해요") +
+    kpiTile(fmtMinutes(k.minutes_saved), "아낀 시간 (추정)", "계산 기준은 아래에");
+  renderChart(r.chart);
+  $("#st-tools").innerHTML = r.top_tools.length ? r.top_tools.map((t) => `<li>${esc(t.name)} <span>${t.count}회</span></li>`).join("") : '<li class="muted">아직 기록이 없어요</li>';
+  $("#st-assume").innerHTML = r.assumptions.map((a) => `<li>${esc(a.label)}: ${a.minutes}분</li>`).join("");
+  $("#st-feedback").innerHTML = r.recent_feedback.length ? `<h4>최근 남긴 의견</h4><ul class="plain-list">${r.recent_feedback.map((f) => `<li><span>${f.rating === "up" ? "좋아요" : "아쉬워요"} · ${esc(f.reason)}</span><small class="muted">${f.day.slice(5)}</small></li>`).join("")}</ul>` : "";
+}
+$("#btn-stats").addEventListener("click", () => { $("#stats").classList.remove("hidden"); loadStats().catch((e) => toast(e.message)); });
+$("#stats-close").addEventListener("click", () => { $("#stats").classList.add("hidden"); $("#chart-tip").classList.add("hidden"); });
+$("#st-period").addEventListener("change", () => loadStats());
 
 /* ---------- 시작 ---------- */
 (async function init() {
