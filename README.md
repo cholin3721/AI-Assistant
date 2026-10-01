@@ -33,6 +33,8 @@ Gmail · 구글 캘린더 · 구글 드라이브 · 인하공전 학교 공지�
 
 ## 실행 방법 (Windows)
 
+0. **내려받기**: [GitHub 저장소](https://github.com/cholin3721/AI-Assistant)에서 「Code」→「Download ZIP」으로 받아 압축을 풀거나,
+   `git clone https://github.com/cholin3721/AI-Assistant.git` 으로 받습니다.
 1. 이 폴더의 **`run.bat`** 을 더블클릭합니다.
    - Python이 없으면 설치 페이지가 열립니다. 설치할 때 **"Add python.exe to PATH"** 를 꼭 체크하세요.
    - 처음 실행할 때만 필요한 프로그램을 설치하느라 1~2분 걸립니다.
@@ -87,4 +89,3 @@ data/                 키·토큰·기록 (자동 생성, 공유 금지)
 run.bat / run.sh      원클릭 실행
 autostart_on/off.bat  윈도우 시작 시 자동 실행 켜기/끄기
 ```
-# AI-Assistant
