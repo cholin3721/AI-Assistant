@@ -87,3 +87,4 @@ data/                 키·토큰·기록 (자동 생성, 공유 금지)
 run.bat / run.sh      원클릭 실행
 autostart_on/off.bat  윈도우 시작 시 자동 실행 켜기/끄기
 ```
+# AI-Assistant
