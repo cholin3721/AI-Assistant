@@ -154,6 +154,7 @@ def status():
         "notifications": {"unread": notify.unread()},
         "todos": {"open": len(todos.items())},
         "forms": {"drafts": len(forms.list_drafts())},
+        "timetable": timetable.summary(),
     }
 
 

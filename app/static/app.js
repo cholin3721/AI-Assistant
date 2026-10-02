@@ -79,6 +79,9 @@ async function refreshStatus() {
   updateBell();
   $("#todo-count").textContent = state.todos.open;
   $("#forms-count").textContent = state.forms.drafts;
+  const tts = state.timetable;
+  $("#tt-count").textContent = tts.classes ? tts.classes : "미등록";
+  $("#tt-today").textContent = !tts.classes ? "" : tts.today.length ? "오늘 수업: " + tts.today.map((c) => `${c.start} ${c.title}`).join(" · ") : "오늘은 수업이 없어요";
   return state;
 }
 
@@ -345,7 +348,6 @@ function showTab(tab) {
   if (tab === "ai") loadMemory();
   if (tab === "auto") fillAuto();
   if (tab === "tg") { fillDiscord(); fillTelegram(); }
-  if (tab === "tt") loadTimetable();
 }
 $$("#set-tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
 $("#btn-settings").addEventListener("click", () => openSettings());
@@ -720,48 +722,149 @@ $("#tg-save").addEventListener("click", async () => {
 $("#tg-test").addEventListener("click", async () => { try { await api("/api/telegram/test", { method: "POST" }); toast("보냈어요. 폰을 확인해보세요"); } catch (e) { toast(e.message); } });
 $("#tg-off").addEventListener("click", async () => { await api("/api/telegram/disconnect", { method: "POST" }); await refreshStatus(); fillTelegram(); });
 
-/* ---------- 시간표 ---------- */
+/* ---------- 시간표 (주간 격자) ---------- */
 const DAYNAMES = "월화수목금토일";
-function ttRow(c = { day: 0, start: "09:00", end: "10:00", title: "", place: "" }) {
-  const tr = document.createElement("tr");
-  tr.innerHTML = `<td><select>${[...DAYNAMES].map((d, i) => `<option value="${i}" ${i === +c.day ? "selected" : ""}>${d}</option>`).join("")}</select></td>
-    <td><input type="time" value="${esc(c.start)}"></td><td><input type="time" value="${esc(c.end)}"></td>
-    <td><input value="${esc(c.title)}" placeholder="과목명"></td><td><input value="${esc(c.place || "")}" placeholder="강의실"></td>
-    <td><button class="x" title="삭제">×</button></td>`;
-  tr.querySelector(".x").addEventListener("click", () => tr.remove());
-  $("#tt-body").appendChild(tr);
-}
-async function loadTimetable(rows) {
-  if (!rows) rows = (await api("/api/timetable")).classes;
-  $("#tt-body").innerHTML = "";
-  rows.forEach(ttRow);
-  if (!rows.length) setResult($("#tt-result"), "", "등록된 수업이 없어요. 이미지를 올리거나 직접 추가하세요.");
-}
-function ttCollect() {
-  return $$("#tt-body tr").map((tr) => {
-    const [day, start, end, title, place] = tr.querySelectorAll("select, input");
-    return { day: +day.value, start: start.value, end: end.value, title: title.value.trim(), place: place.value.trim() };
+const TT = { rows: [], preview: null, slot: 24, editing: null, startH: 9, endH: 18 };
+const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+const toHM = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+function ttHues(rows) {  // 과목마다 색 하나: 이름으로 자리를 정하고, 겹치면 다음 빈 색으로
+  const map = {}, used = new Set();
+  [...new Set(rows.map((c) => c.title))].sort().forEach((title) => {
+    let h = 0; for (const ch of title) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+    let slot = h % 8;
+    for (let i = 0; i < 8 && used.has(slot); i++) slot = (slot + 1) % 8;
+    used.add(slot); map[title] = slot + 1;
   });
+  return map;
 }
-$("#tt-add").addEventListener("click", () => ttRow());
-$("#tt-save").addEventListener("click", async () => {
-  const rows = ttCollect();
+function renderTT() {
+  const rows = TT.preview || TT.rows;
+  const startH = Math.min(9, ...rows.map((c) => Math.floor(toMin(c.start) / 60)));
+  const endH = Math.max(18, ...rows.map((c) => Math.ceil(toMin(c.end) / 60)));
+  const days = rows.some((c) => c.day === 6) ? 7 : rows.some((c) => c.day === 5) ? 6 : 5;
+  const H = (endH - startH) * 2 * TT.slot, today = (new Date().getDay() + 6) % 7;
+  Object.assign(TT, { startH, endH });
+  const hue = ttHues(rows);
+  let head = "<span></span>", cols = "", times = "";
+  for (let h = startH; h <= endH; h++) times += `<span style="top:${(h - startH) * 2 * TT.slot}px">${String(h).padStart(2, "0")}:00</span>`;
+  for (let d = 0; d < days; d++) {
+    head += `<span class="${d === today ? "today" : ""}">${DAYNAMES[d]}${d === today ? " · 오늘" : ""}</span>`;
+    const blocks = rows.filter((c) => c.day === d).map((c) => {
+      const top = (toMin(c.start) - startH * 60) / 30 * TT.slot;
+      const h = Math.max(22, (toMin(c.end) - toMin(c.start)) / 30 * TT.slot - 2);
+      return `<button type="button" class="ttb h${hue[c.title]}${TT.preview ? " pv" : ""}" data-id="${esc(c.id || "")}" style="top:${top}px;height:${h}px" title="${esc(c.title)} ${c.start}~${c.end}">
+        <b>${esc(c.title)}</b><small>${c.start}~${c.end}${c.place ? " · " + esc(c.place) : ""}</small></button>`;
+    }).join("");
+    cols += `<div class="ttg-col${d === today ? " today" : ""}" data-day="${d}" style="height:${H}px">${blocks}</div>`;
+  }
+  $("#tt-grid").innerHTML = `<div class="ttg-head" style="--cols:${days}">${head}</div>
+    <div class="ttg-body" style="--cols:${days};--slot:${TT.slot}px"><div class="ttg-times" style="height:${H}px">${times}</div>${cols}</div>`;
+  $("#tt-empty").classList.toggle("hidden", rows.length > 0);
+  $("#tt-clear").classList.toggle("hidden", !TT.rows.length || !!TT.preview);
+  $("#tt-preview").classList.toggle("hidden", !TT.preview);
+  $$("#tt-grid .ttg-col").forEach((col) => col.addEventListener("click", (e) => {
+    if (TT.preview) return;
+    const blk = e.target.closest(".ttb");
+    if (blk) { const c = TT.rows.find((x) => x.id === blk.dataset.id); if (c) openClassEdit(c, false); return; }
+    const y = e.clientY - col.getBoundingClientRect().top;
+    const start = TT.startH * 60 + Math.max(0, Math.floor(y / TT.slot)) * 30;
+    openClassEdit({ day: +col.dataset.day, start: toHM(start), end: toHM(Math.min(start + 110, 23 * 60 + 50)), title: "", place: "" }, true);
+  }));
+}
+async function ttSave(rows, msg) {
   const r = await api("/api/timetable", { method: "PUT", body: { classes: rows } });
-  const dropped = rows.filter((x) => x.title).length - r.classes.length;
-  setResult($("#tt-result"), "ok", `수업 ${r.classes.length}개 저장했어요.` + (dropped > 0 ? ` (시간이 잘못된 ${dropped}개는 뺐어요)` : ""));
-  loadTimetable(r.classes);
+  TT.rows = r.classes; TT.preview = null; renderTT();
+  if (msg) setResult($("#tt-result"), "ok", msg);
+  refreshStatus().catch(() => {});
+  return r.classes;
+}
+async function openTT() {
+  $("#tt").classList.remove("hidden");
+  setResult($("#tt-result"), "", "");
+  TT.preview = null;
+  TT.rows = (await api("/api/timetable")).classes;
+  renderTT();
+}
+$("#btn-tt").addEventListener("click", () => openTT().catch((e) => toast(e.message)));
+$("#tt-close").addEventListener("click", () => $("#tt").classList.add("hidden"));
+$("#wiz-tt").addEventListener("click", async () => {
+  await api("/api/settings", { method: "POST", body: { setup_done: true } }).catch(() => {});
+  closeWizard(); openTT();
 });
+
+/* 수업 추가·수정 창 */
+function openClassEdit(c, isNew) {
+  TT.editing = isNew ? null : c.id;
+  $("#tt-edit-title").textContent = isNew ? "수업 추가" : "수업 고치기";
+  $("#te-title").value = c.title || ""; $("#te-day").value = String(c.day);
+  $("#te-start").value = c.start; $("#te-end").value = c.end; $("#te-place").value = c.place || "";
+  $("#te-del").classList.toggle("hidden", isNew);
+  setResult($("#te-result"), "", "");
+  $("#tt-edit").classList.remove("hidden");
+  setTimeout(() => $("#te-title").focus(), 30);
+}
+const closeClassEdit = () => $("#tt-edit").classList.add("hidden");
+$("#tt-edit-close").addEventListener("click", closeClassEdit);
+$("#tt-add").addEventListener("click", () => openClassEdit({ day: Math.min((new Date().getDay() + 6) % 7, 4), start: "09:00", end: "10:50", title: "", place: "" }, true));
+$("#tt-add2").addEventListener("click", () => $("#tt-add").click());
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#tt-edit").classList.contains("hidden")) closeClassEdit(); });
+$("#tt-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const c = { day: +$("#te-day").value, start: $("#te-start").value, end: $("#te-end").value, title: $("#te-title").value.trim(), place: $("#te-place").value.trim() };
+  const out = $("#te-result");
+  if (!c.title) return setResult(out, "bad", "과목명을 입력해주세요.");
+  if (!c.start || !c.end || toMin(c.end) <= toMin(c.start)) return setResult(out, "bad", "끝 시간이 시작 시간보다 늦어야 해요.");
+  const others = TT.rows.filter((x) => x.id !== TT.editing);
+  const clash = others.find((x) => x.day === c.day && toMin(x.start) < toMin(c.end) && toMin(c.start) < toMin(x.end));
+  if (TT.editing) c.id = TT.editing;
+  try {
+    await ttSave([...others, c], TT.editing ? "수업을 고쳤어요." : `「${c.title}」 수업을 추가했어요.`);
+    closeClassEdit();
+    if (clash) toast(`같은 시간에 「${clash.title}」 수업이 있어요. 확인해보세요.`);
+  } catch (err) { setResult(out, "bad", err.message); }
+});
+$("#te-del").addEventListener("click", async () => {
+  const c = TT.rows.find((x) => x.id === TT.editing);
+  await ttSave(TT.rows.filter((x) => x.id !== TT.editing), c ? `「${c.title}」 수업을 지웠어요.` : "");
+  closeClassEdit();
+});
+let ttClearArmed = null;
+$("#tt-clear").addEventListener("click", async (e) => {
+  const b = e.target;
+  if (!ttClearArmed) {  // 실수 방지: 두 번 눌러야 지워짐
+    b.textContent = "한 번 더 누르면 모두 지워요";
+    ttClearArmed = setTimeout(() => { ttClearArmed = null; b.textContent = "전체 지우기"; }, 4000);
+    return;
+  }
+  clearTimeout(ttClearArmed); ttClearArmed = null; b.textContent = "전체 지우기";
+  await ttSave([], "시간표를 모두 지웠어요.");
+});
+
+/* 사진으로 등록 */
 async function ttUpload(file) {
   if (!file) return;
+  if (!file.type.startsWith("image/")) return setResult($("#tt-result"), "bad", "이미지 파일(캡처 화면)을 올려주세요.");
   const fd = new FormData(); fd.append("file", file);
   setResult($("#tt-result"), "wait", "AI가 시간표를 읽는 중… (10~20초)");
+  $("#tt-photo-btn").classList.add("busy");
   try {
     const r = await api("/api/timetable/extract", { method: "POST", body: fd });
-    loadTimetable(r.classes);
-    setResult($("#tt-result"), "ok", `수업 ${r.classes.length}개를 읽었어요. 틀린 곳을 고친 뒤 「시간표 저장」을 눌러주세요.`);
+    if (!r.classes.length) return setResult($("#tt-result"), "bad", "수업을 찾지 못했어요. 요일과 시간이 잘 보이는 캡처로 다시 올려주세요.");
+    if (!TT.rows.length) { await ttSave(r.classes, `수업 ${r.classes.length}개를 등록했어요. 틀린 곳은 눌러서 고치세요.`); return; }
+    TT.preview = r.classes;
+    $("#tt-preview-text").innerHTML = `<b>AI가 수업 ${r.classes.length}개를 읽었어요.</b> 아래는 미리보기예요. 지금 시간표(${TT.rows.length}개)를 어떻게 할까요?`;
+    setResult($("#tt-result"), "", ""); renderTT();
   } catch (e) { setResult($("#tt-result"), "bad", e.message); }
+  finally { $("#tt-photo-btn").classList.remove("busy"); $("#tt-file").value = ""; }
 }
 $("#tt-file").addEventListener("change", (e) => ttUpload(e.target.files[0]));
+$("#tt-pv-replace").addEventListener("click", () => ttSave(TT.preview, `수업 ${TT.preview.length}개로 바꿨어요. 틀린 곳은 눌러서 고치세요.`));
+$("#tt-pv-merge").addEventListener("click", () => {
+  const key = (c) => `${c.day}|${c.start}|${c.title}`, have = new Set(TT.rows.map(key));
+  const add = TT.preview.filter((c) => !have.has(key(c)));
+  ttSave([...TT.rows, ...add], `수업 ${add.length}개를 추가했어요.`);
+});
+$("#tt-pv-cancel").addEventListener("click", () => { TT.preview = null; renderTT(); });
 const ttDrop = $("#tt-drop");
 ["dragenter", "dragover"].forEach((ev) => ttDrop.addEventListener(ev, (e) => { e.preventDefault(); ttDrop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((ev) => ttDrop.addEventListener(ev, (e) => { e.preventDefault(); ttDrop.classList.remove("over"); }));

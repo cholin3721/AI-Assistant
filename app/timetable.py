@@ -94,6 +94,15 @@ def today_block() -> str:
     return "\n".join(lines)
 
 
+def summary() -> dict:
+    """화면 사이드바용: 등록된 수업 수와 오늘 수업."""
+    rows = get()
+    d = datetime.now(KST).weekday()
+    today = [{"start": c["start"], "end": c["end"], "title": c["title"], "place": c["place"]}
+             for c in rows if c["day"] == d]
+    return {"classes": len(rows), "today": today}
+
+
 # ---------- 빈 시간 계산 ----------
 def _busy_from_calendar(start: datetime, end: datetime) -> list:
     if google_auth.get_credentials() is None:
