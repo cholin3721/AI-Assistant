@@ -376,6 +376,18 @@ class TeamChannelIn(BaseModel):
     channel_id: str = ""
 
 
+class ReadChannelIn(BaseModel):
+    on: bool = False
+
+
+@app.post("/api/discord/read")
+def discord_read(body: ReadChannelIn):
+    try:
+        return discord_bot.set_read_channel(body.on)
+    except discord_bot.DiscordError as e:
+        raise _bad(e)
+
+
 @app.post("/api/discord/team")
 def discord_team(body: TeamChannelIn):
     try:
@@ -535,7 +547,8 @@ def memory_delete(fid: str):
 # ---------- 시간표 ----------
 @app.get("/api/timetable")
 def timetable_get():
-    return {"classes": timetable.get()}
+    return {"classes": timetable.get(),
+            "periods": [{"n": i + 1, "start": s, "end": e} for i, (s, e) in enumerate(timetable.PERIODS)]}
 
 
 @app.put("/api/timetable")
@@ -547,10 +560,11 @@ def timetable_put(body: TimetableIn):
 async def timetable_extract(file: UploadFile = File(...)):
     data = await file.read()
     mime = file.content_type or "image/png"
-    if not mime.startswith("image/") or len(data) > 10_000_000:
-        raise HTTPException(400, "10MB 이하의 이미지 파일(png, jpg)을 올려주세요.")
+    is_pdf = data[:5] == b"%PDF-"
+    if not (mime.startswith("image/") or is_pdf) or len(data) > 10_000_000:
+        raise HTTPException(400, "10MB 이하의 시간표 PDF나 이미지(png, jpg)를 올려주세요.")
     try:
-        return {"classes": timetable.extract_from_image(data, mime)}
+        return timetable.extract_from_file(data, mime)
     except ToolError as e:
         raise _bad(e)
     except Exception as e:

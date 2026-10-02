@@ -133,5 +133,76 @@ class SchedulerWindow(unittest.TestCase):
         self.assertFalse(ok)
 
 
+
+class PortalTimetable(unittest.TestCase):
+    """포털 「개인수업시간표조회」 PDF 파서 — 좌표만으로 요일·교시를 맞히는지 (가짜 좌표로 검증)."""
+
+    def _fake(self):
+        chars, boxes = [], []
+
+        def put(text, x, y, step=7.9):
+            for i, ch in enumerate(text):
+                chars.append((ch, x + i * step, y))
+        put("일반", 40, 545)                         # 소속 줄의 '일' — 요일로 착각하면 안 됨
+        for i, d in enumerate("월화수목금토"):        # 요일 머리글
+            chars.append((d, 156 + i * 105, 530))
+        put("기타", 774, 530)
+        times = ["09:00~09:50", "09:55~10:45", "10:50~11:40", "11:45~12:35", "12:40~13:30"]
+        for i, t in enumerate(times):                # 교시별 시간 (위에서 아래로)
+            put(t, 54, 505 - i * 15.6, step=4.2)
+            boxes.append((42.5, 498.9 - i * 15.6, 107.7, 514.5 - i * 15.6))
+        # 화요일 2~4교시가 합쳐진 칸: 과목명이 줄바꿈되어 교수명이 둘로 쪼개진 경우
+        boxes.append((212.6, 452.1, 317.5, 498.9))
+        put("생성형AI프로그래밍:3C", 216, 480, step=5.5)
+        put("(이", 301.3, 480)
+        put("원주)", 254.8, 472)
+        put("7", 243.2, 464); put("호관", 247.6, 464)      # 실제 PDF처럼 숫자는 좁고 한글은 넓게
+        put("301", 266.5, 464, step=4.4); put("호", 279.7, 464)
+        # 수요일 1교시 한 칸짜리
+        boxes.append((317.5, 498.9, 422.4, 514.5))
+        put("데이터분석:3C", 327, 505, step=6.0); put("(이수정)", 381, 505)
+        boxes.append((422.4, 498.9, 527.2, 514.5))    # 빈 칸
+        return chars, boxes
+
+    def test_parse(self):
+        from app import portal_timetable as pt
+        fake = self._fake()
+        orig = pt._read
+        pt._read = lambda data: fake
+        try:
+            rows = pt.parse(b"%PDF-")
+        finally:
+            pt._read = orig
+        self.assertEqual(len(rows), 2)
+        a = rows[0]
+        self.assertEqual((a["day"], a["start"], a["end"]), (1, "09:55", "12:35"))
+        self.assertEqual((a["title"], a["prof"], a["place"]), ("생성형AI프로그래밍", "이원주", "7호관 301호"))
+        b = rows[1]
+        self.assertEqual((b["day"], b["start"], b["end"], b["title"], b["prof"]), (2, "09:00", "09:50", "데이터분석", "이수정"))
+
+    def test_not_a_timetable(self):
+        from app import portal_timetable as pt
+        self.assertEqual(pt.parse(b"not a pdf"), [])
+
+    def test_normalize_keeps_prof(self):
+        from app import timetable
+        rows = timetable.normalize([{"day": 1, "start": "09:55", "end": "12:35", "title": "블록체인", "prof": "최효현"}])
+        self.assertEqual(rows[0]["prof"], "최효현")
+        self.assertEqual(len(timetable.PERIODS), 16)
+        self.assertEqual(timetable.PERIODS[1], ("09:55", "10:45"))
+
+
+class DiscordTeamChat(unittest.TestCase):
+    def test_format_messages(self):
+        from app import discord_bot as db
+        raw = [("민수", "10/02 09:00", "내일 3시에 회의하자", False),
+               ("봇", "10/02 09:01", "알림입니다", True),
+               ("지은", "10/02 09:02", "", False),
+               ("지은", "10/02 09:03", "좋아 발표자료는 내가 할게", False)]
+        out = db.format_messages(raw)
+        self.assertEqual([m["author"] for m in out], ["민수", "지은"])   # 봇·빈 메시지 제외, 순서 유지
+        long = [("a", "t", "가" * 600, False)] * 50
+        self.assertLess(sum(len(m["text"]) for m in db.format_messages(long, max_chars=3000)), 3000)
+
 if __name__ == "__main__":
     unittest.main()

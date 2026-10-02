@@ -8,4 +8,5 @@ Claude outputs/
 dist/
 build/
 *.spec
-
+# 포털에서 받은 내 시간표 (이름·학번이 들어 있음)
+개인수업시간표조회*.pdf

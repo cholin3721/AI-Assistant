@@ -79,6 +79,7 @@ async function refreshStatus() {
   updateBell();
   $("#todo-count").textContent = state.todos.open;
   $("#forms-count").textContent = state.forms.drafts;
+  $("#q-team").classList.toggle("hidden", !state.discord.read_channel);
   const tts = state.timetable;
   $("#tt-count").textContent = tts.classes ? tts.classes : "미등록";
   $("#tt-today").textContent = !tts.classes ? "" : tts.today.length ? "오늘 수업: " + tts.today.map((c) => `${c.start} ${c.title}`).join(" · ") : "오늘은 수업이 없어요";
@@ -667,7 +668,8 @@ async function fillTeam(d) {
   const box = $("#dc-team"); if (!box) return;
   box.classList.toggle("hidden", !d.linked);
   if (!d.linked) return;
-  $("#dc-team-now").textContent = d.team_channel_name ? `현재: ${d.team_channel_name}` : "아직 팀 채널이 없어요. 마감 알림·일정 후보를 공유할 채널을 고르세요 (봇은 그 채널을 읽지 않고 보내기만 합니다).";
+  $("#dc-team-now").textContent = d.team_channel_name ? `현재: ${d.team_channel_name}` : "아직 팀 채널이 없어요. 마감 알림·일정 후보를 공유할 채널을 고르세요. 아래 「대화 요약」을 켜지 않으면 봇은 그 채널에 보내기만 하고 읽지 않아요.";
+  $("#dc-read").checked = !!d.read_channel; $("#dc-read").disabled = !d.team_channel_id;
   const sel = $("#dc-team-sel");
   try {
     const r = await api("/api/discord/channels");
@@ -680,6 +682,21 @@ $("#dc-team-save")?.addEventListener("click", async () => {
     await api("/api/discord/team", { method: "POST", body: { channel_id: $("#dc-team-sel").value } });
     await refreshStatus(); fillDiscord(); toast("팀 채널을 저장했어요");
   } catch (e) { toast(e.message); }
+});
+$("#dc-read").addEventListener("change", async (e) => {
+  const on = e.target.checked, out = $("#dc-read-result");
+  setResult(out, "wait", on ? "권한을 확인하며 봇이 다시 접속하는 중… (10초쯤)" : "끄는 중…");
+  try {
+    await api("/api/discord/read", { method: "POST", body: { on } });
+    for (let i = 0; i < 8; i++) {   // 봇이 다시 접속할 때까지 잠깐 기다림
+      await new Promise((r) => setTimeout(r, 1500));
+      await refreshStatus();
+      if (state.discord.online || (state.discord.error && !state.discord.read_channel)) break;
+    }
+    const d = state.discord; e.target.checked = !!d.read_channel;
+    if (on && !d.read_channel) setResult(out, "bad", d.error || "켜지 못했어요. 아래 안내대로 권한을 켠 뒤 다시 시도해주세요.");
+    else setResult(out, "ok", on ? "켰어요. 이제 \"팀 채널 요약해줘\"라고 말해보세요." : "껐어요. 봇은 이제 채널을 읽지 않아요.");
+  } catch (err) { e.target.checked = !on; setResult(out, "bad", err.message); }
 });
 $("#dc-save").addEventListener("click", async () => {
   const text = $("#dc-token").value.trim(); if (!text) return setResult($("#dc-result"), "bad", "토큰을 붙여넣어 주세요.");
@@ -724,7 +741,7 @@ $("#tg-off").addEventListener("click", async () => { await api("/api/telegram/di
 
 /* ---------- 시간표 (주간 격자) ---------- */
 const DAYNAMES = "월화수목금토일";
-const TT = { rows: [], preview: null, slot: 24, editing: null, startH: 9, endH: 18 };
+const TT = { rows: [], preview: null, ppm: 0.8, editing: null, periods: [], start: 540, end: 1085 };  // ppm: 1분당 픽셀
 const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
 const toHM = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 function ttHues(rows) {  // 과목마다 색 하나: 이름으로 자리를 정하고, 겹치면 다음 빈 색으로
@@ -737,28 +754,40 @@ function ttHues(rows) {  // 과목마다 색 하나: 이름으로 자리를 정�
   });
   return map;
 }
+function ttPeriodAt(min) {  // 그 시각이 속한 교시 (쉬는 시간은 앞 교시로)
+  const P = TT.periods; let hit = -1;
+  P.forEach((p, i) => { if (toMin(p.start) <= min) hit = i; });
+  return hit;
+}
 function renderTT() {
-  const rows = TT.preview || TT.rows;
-  const startH = Math.min(9, ...rows.map((c) => Math.floor(toMin(c.start) / 60)));
-  const endH = Math.max(18, ...rows.map((c) => Math.ceil(toMin(c.end) / 60)));
+  const rows = TT.preview || TT.rows, P = TT.periods;
+  const firstP = P.length ? toMin(P[0].start) : 540, tenthP = P.length ? toMin(P[Math.min(9, P.length - 1)].end) : 1080;
+  let start = Math.min(firstP, ...rows.map((c) => Math.floor(toMin(c.start) / 60) * 60));
+  let end = Math.max(tenthP, ...rows.map((c) => toMin(c.end)));
+  const lastP = P.find((p) => toMin(p.end) >= end);           // 수업이 끝나는 교시의 끝까지 보여줌
+  end = lastP ? toMin(lastP.end) : Math.ceil(end / 60) * 60;
+  Object.assign(TT, { start, end });
+  const px = (m) => Math.round((m - start) * TT.ppm), H = px(end);
   const days = rows.some((c) => c.day === 6) ? 7 : rows.some((c) => c.day === 5) ? 6 : 5;
-  const H = (endH - startH) * 2 * TT.slot, today = (new Date().getDay() + 6) % 7;
-  Object.assign(TT, { startH, endH });
-  const hue = ttHues(rows);
-  let head = "<span></span>", cols = "", times = "";
-  for (let h = startH; h <= endH; h++) times += `<span style="top:${(h - startH) * 2 * TT.slot}px">${String(h).padStart(2, "0")}:00</span>`;
+  const today = (new Date().getDay() + 6) % 7, hue = ttHues(rows);
+  const marks = P.length ? P.filter((p) => toMin(p.start) >= start && toMin(p.start) < end).map((p) => ({ m: toMin(p.start), n: p.n, t: p.start }))
+    : Array.from({ length: Math.ceil((end - start) / 60) }, (_, i) => ({ m: start + i * 60, n: "", t: toHM(start + i * 60) }));
+  const times = marks.map((k) => `<span style="top:${px(k.m)}px">${k.n ? `<b>${k.n}</b>` : ""}${k.t}</span>`).join("");
+  const rules = marks.map((k) => `<i style="top:${px(k.m)}px"></i>`).join("") + `<i style="top:${H}px"></i>`;
+  let head = "<span></span>", cols = "";
   for (let d = 0; d < days; d++) {
     head += `<span class="${d === today ? "today" : ""}">${DAYNAMES[d]}${d === today ? " · 오늘" : ""}</span>`;
     const blocks = rows.filter((c) => c.day === d).map((c) => {
-      const top = (toMin(c.start) - startH * 60) / 30 * TT.slot;
-      const h = Math.max(22, (toMin(c.end) - toMin(c.start)) / 30 * TT.slot - 2);
-      return `<button type="button" class="ttb h${hue[c.title]}${TT.preview ? " pv" : ""}" data-id="${esc(c.id || "")}" style="top:${top}px;height:${h}px" title="${esc(c.title)} ${c.start}~${c.end}">
-        <b>${esc(c.title)}</b><small>${c.start}~${c.end}${c.place ? " · " + esc(c.place) : ""}</small></button>`;
+      const h = Math.max(22, px(toMin(c.end)) - px(toMin(c.start)) - 2);
+      const sub = [c.place, c.prof ? c.prof + " 교수" : ""].filter(Boolean).map(esc).join(" · ");
+      return `<button type="button" class="ttb h${hue[c.title]}${TT.preview ? " pv" : ""}" data-id="${esc(c.id || "")}" style="top:${px(toMin(c.start))}px;height:${h}px" title="${esc(c.title)} ${c.start}~${c.end}">
+        <b>${esc(c.title)}</b><small>${c.start}~${c.end}</small>${sub ? `<small>${sub}</small>` : ""}</button>`;
     }).join("");
     cols += `<div class="ttg-col${d === today ? " today" : ""}" data-day="${d}" style="height:${H}px">${blocks}</div>`;
   }
   $("#tt-grid").innerHTML = `<div class="ttg-head" style="--cols:${days}">${head}</div>
-    <div class="ttg-body" style="--cols:${days};--slot:${TT.slot}px"><div class="ttg-times" style="height:${H}px">${times}</div>${cols}</div>`;
+    <div class="ttg-body" style="--cols:${days}"><div class="ttg-rules" style="height:${H}px">${rules}</div>
+    <div class="ttg-times" style="height:${H}px">${times}</div>${cols}</div>`;
   $("#tt-empty").classList.toggle("hidden", rows.length > 0);
   $("#tt-clear").classList.toggle("hidden", !TT.rows.length || !!TT.preview);
   $("#tt-preview").classList.toggle("hidden", !TT.preview);
@@ -766,9 +795,11 @@ function renderTT() {
     if (TT.preview) return;
     const blk = e.target.closest(".ttb");
     if (blk) { const c = TT.rows.find((x) => x.id === blk.dataset.id); if (c) openClassEdit(c, false); return; }
-    const y = e.clientY - col.getBoundingClientRect().top;
-    const start = TT.startH * 60 + Math.max(0, Math.floor(y / TT.slot)) * 30;
-    openClassEdit({ day: +col.dataset.day, start: toHM(start), end: toHM(Math.min(start + 110, 23 * 60 + 50)), title: "", place: "" }, true);
+    const min = TT.start + (e.clientY - col.getBoundingClientRect().top) / TT.ppm;
+    const i = ttPeriodAt(min);
+    const slot = i >= 0 ? { start: P[i].start, end: P[Math.min(i + 1, P.length - 1)].end }   // 기본 2교시 연강
+      : { start: toHM(Math.floor(min / 60) * 60), end: toHM(Math.floor(min / 60) * 60 + 110) };
+    openClassEdit({ day: +col.dataset.day, ...slot, title: "", place: "", prof: "" }, true);
   }));
 }
 async function ttSave(rows, msg) {
@@ -782,7 +813,10 @@ async function openTT() {
   $("#tt").classList.remove("hidden");
   setResult($("#tt-result"), "", "");
   TT.preview = null;
-  TT.rows = (await api("/api/timetable")).classes;
+  const r = await api("/api/timetable");
+  TT.rows = r.classes; TT.periods = r.periods || [];
+  const opt = (kind) => '<option value="">직접 입력</option>' + TT.periods.map((p) => `<option value="${p.n}">${p.n}교시 ${kind === "s" ? p.start : "~" + p.end}</option>`).join("");
+  $("#te-ps").innerHTML = opt("s"); $("#te-pe").innerHTML = opt("e");
   renderTT();
 }
 $("#btn-tt").addEventListener("click", () => openTT().catch((e) => toast(e.message)));
@@ -798,19 +832,36 @@ function openClassEdit(c, isNew) {
   $("#tt-edit-title").textContent = isNew ? "수업 추가" : "수업 고치기";
   $("#te-title").value = c.title || ""; $("#te-day").value = String(c.day);
   $("#te-start").value = c.start; $("#te-end").value = c.end; $("#te-place").value = c.place || "";
+  $("#te-prof").value = c.prof || "";
+  syncPeriodSelects();
   $("#te-del").classList.toggle("hidden", isNew);
   setResult($("#te-result"), "", "");
   $("#tt-edit").classList.remove("hidden");
   setTimeout(() => $("#te-title").focus(), 30);
 }
 const closeClassEdit = () => $("#tt-edit").classList.add("hidden");
+function syncPeriodSelects() {  // 시각이 교시와 딱 맞으면 교시를 골라 보여줌
+  const s = TT.periods.find((p) => p.start === $("#te-start").value), e = TT.periods.find((p) => p.end === $("#te-end").value);
+  $("#te-ps").value = s ? String(s.n) : ""; $("#te-pe").value = e ? String(e.n) : "";
+}
+$("#te-ps").addEventListener("change", (ev) => {
+  const p = TT.periods.find((x) => String(x.n) === ev.target.value); if (!p) return;
+  $("#te-start").value = p.start;
+  if (!$("#te-end").value || toMin($("#te-end").value) <= toMin(p.start)) $("#te-end").value = p.end;
+  syncPeriodSelects();
+});
+$("#te-pe").addEventListener("change", (ev) => {
+  const p = TT.periods.find((x) => String(x.n) === ev.target.value); if (!p) return;
+  $("#te-end").value = p.end; syncPeriodSelects();
+});
+["te-start", "te-end"].forEach((id) => $("#" + id).addEventListener("change", syncPeriodSelects));
 $("#tt-edit-close").addEventListener("click", closeClassEdit);
-$("#tt-add").addEventListener("click", () => openClassEdit({ day: Math.min((new Date().getDay() + 6) % 7, 4), start: "09:00", end: "10:50", title: "", place: "" }, true));
+$("#tt-add").addEventListener("click", () => openClassEdit({ day: Math.min((new Date().getDay() + 6) % 7, 4), start: TT.periods[0]?.start || "09:00", end: TT.periods[1]?.end || "10:50", title: "", place: "", prof: "" }, true));
 $("#tt-add2").addEventListener("click", () => $("#tt-add").click());
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#tt-edit").classList.contains("hidden")) closeClassEdit(); });
 $("#tt-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const c = { day: +$("#te-day").value, start: $("#te-start").value, end: $("#te-end").value, title: $("#te-title").value.trim(), place: $("#te-place").value.trim() };
+  const c = { day: +$("#te-day").value, start: $("#te-start").value, end: $("#te-end").value, title: $("#te-title").value.trim(), place: $("#te-place").value.trim(), prof: $("#te-prof").value.trim() };
   const out = $("#te-result");
   if (!c.title) return setResult(out, "bad", "과목명을 입력해주세요.");
   if (!c.start || !c.end || toMin(c.end) <= toMin(c.start)) return setResult(out, "bad", "끝 시간이 시작 시간보다 늦어야 해요.");
@@ -843,16 +894,18 @@ $("#tt-clear").addEventListener("click", async (e) => {
 /* 사진으로 등록 */
 async function ttUpload(file) {
   if (!file) return;
-  if (!file.type.startsWith("image/")) return setResult($("#tt-result"), "bad", "이미지 파일(캡처 화면)을 올려주세요.");
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  if (!file.type.startsWith("image/") && !isPdf) return setResult($("#tt-result"), "bad", "시간표 PDF나 캡처 이미지를 올려주세요.");
   const fd = new FormData(); fd.append("file", file);
-  setResult($("#tt-result"), "wait", "AI가 시간표를 읽는 중… (10~20초)");
+  setResult($("#tt-result"), "wait", isPdf ? "시간표 PDF를 읽는 중…" : "AI가 시간표를 읽는 중… (10~20초)");
   $("#tt-photo-btn").classList.add("busy");
   try {
     const r = await api("/api/timetable/extract", { method: "POST", body: fd });
-    if (!r.classes.length) return setResult($("#tt-result"), "bad", "수업을 찾지 못했어요. 요일과 시간이 잘 보이는 캡처로 다시 올려주세요.");
-    if (!TT.rows.length) { await ttSave(r.classes, `수업 ${r.classes.length}개를 등록했어요. 틀린 곳은 눌러서 고치세요.`); return; }
+    if (!r.classes.length) return setResult($("#tt-result"), "bad", "수업을 찾지 못했어요. 포털 시간표 PDF나, 요일과 시간이 잘 보이는 캡처로 다시 올려주세요.");
+    const from = r.source === "portal" ? "포털 시간표에서" : "AI가";
+    if (!TT.rows.length) { await ttSave(r.classes, `${from} 수업 ${r.classes.length}개를 읽어 등록했어요.` + (r.source === "portal" ? "" : " 틀린 곳은 눌러서 고치세요.")); return; }
     TT.preview = r.classes;
-    $("#tt-preview-text").innerHTML = `<b>AI가 수업 ${r.classes.length}개를 읽었어요.</b> 아래는 미리보기예요. 지금 시간표(${TT.rows.length}개)를 어떻게 할까요?`;
+    $("#tt-preview-text").innerHTML = `<b>${from} 수업 ${r.classes.length}개를 읽었어요.</b> 아래는 미리보기예요. 지금 시간표(${TT.rows.length}개)를 어떻게 할까요?`;
     setResult($("#tt-result"), "", ""); renderTT();
   } catch (e) { setResult($("#tt-result"), "bad", e.message); }
   finally { $("#tt-photo-btn").classList.remove("busy"); $("#tt-file").value = ""; }

@@ -304,9 +304,13 @@ details.msgr[open] summary{margin-bottom:8px}
 .ttg-head span.today{color:var(--accent)}
 .ttg-body{margin:10px 0 14px}
 .ttg-times{position:relative}
-.ttg-times span{position:absolute;right:8px;transform:translateY(-50%);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
-.ttg-col{position:relative;border-left:1px solid var(--line);cursor:cell;
-  background-image:linear-gradient(var(--line) 1px,transparent 1px);background-size:100% calc(var(--slot)*2)}
+.ttg-times span{position:absolute;right:6px;top:0;padding-top:3px;font-size:11px;line-height:1.25;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right}
+.ttg-times span b{display:block;color:var(--text);font-size:12px}
+.ttg-body{position:relative}
+.ttg-rules{position:absolute;left:0;right:0;top:0;pointer-events:none}
+.ttg-rules i{position:absolute;left:0;right:0;border-top:1px solid var(--line)}
+.hint{font-size:12px;align-self:end;padding-bottom:10px}
+.ttg-col{position:relative;border-left:1px solid var(--line);cursor:cell}
 .ttg-col:last-child{border-right:1px solid var(--line)}
 .ttg-col.today{background-color:color-mix(in srgb,var(--accent) 5%,transparent)}
 .ttg-col:hover{background-color:color-mix(in srgb,var(--accent) 8%,transparent)}
@@ -329,8 +333,8 @@ details.msgr[open] summary{margin-bottom:8px}
 label.btn-sm{cursor:pointer}
 label.btn-sm.busy{opacity:.6;pointer-events:none}
 .overlay.top{z-index:15}
-.modal.narrow{width:min(440px,100%)}
-.grid3{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px}
+.modal.narrow{width:min(520px,100%)}
+.grid3{display:grid;grid-template-columns:1fr 1.25fr 1.25fr;gap:10px}
 .note.safe .ghost{margin-top:8px}
 .modal label.btn-sm{display:inline-block;color:#fff;font-size:14px;margin:0;white-space:nowrap}
 .ttb{display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch}

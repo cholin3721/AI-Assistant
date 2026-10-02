@@ -1,4 +1,4 @@
-"""시간표 저장 + 사진에서 시간표 읽기 + 빈 시간 찾기."""
+"""시간표 저장 + 포털 PDF·사진에서 시간표 읽기 + 빈 시간 찾기."""
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,6 +14,14 @@ KST = timezone(timedelta(hours=9))
 DAYS = "월화수목금토일"
 DEFAULT = {"classes": []}
 
+# 인하공업전문대학 교시별 수업 시간 (포털 「개인수업시간표조회」 기준, 50분 수업 + 5분 쉬는 시간)
+PERIODS = [
+    ("09:00", "09:50"), ("09:55", "10:45"), ("10:50", "11:40"), ("11:45", "12:35"),
+    ("12:40", "13:30"), ("13:35", "14:25"), ("14:30", "15:20"), ("15:25", "16:15"),
+    ("16:20", "17:10"), ("17:15", "18:05"), ("18:10", "19:00"), ("19:05", "19:55"),
+    ("20:00", "20:45"), ("20:50", "21:35"), ("21:40", "22:25"), ("22:30", "23:15"),
+]
+
 
 class ClassItem(BaseModel):
     day: int = Field(description="요일 번호. 월=0, 화=1, 수=2, 목=3, 금=4, 토=5, 일=6")
@@ -21,6 +29,7 @@ class ClassItem(BaseModel):
     end: str = Field(description="종료 시각 HH:MM (24시간제)")
     title: str = Field(description="과목명")
     place: str = Field(description="강의실. 없으면 빈 문자열")
+    prof: str = Field(default="", description="교수명. 없으면 빈 문자열")
 
 
 class Timetable(BaseModel):
@@ -49,7 +58,8 @@ def normalize(rows: list) -> list:
         if not (0 <= day <= 6) or not title or end <= start:
             continue
         out.append({"id": r.get("id") or uuid.uuid4().hex[:8], "day": day, "start": start, "end": end,
-                    "title": title, "place": str(r.get("place") or "").strip()[:40]})
+                    "title": title, "place": str(r.get("place") or "").strip()[:40],
+                    "prof": str(r.get("prof") or "").strip()[:20]})
     return sorted(out, key=lambda c: (c["day"], c["start"]))
 
 
@@ -63,6 +73,17 @@ def replace(rows: list) -> list:
     return rows
 
 
+def extract_from_file(data: bytes, mime: str) -> dict:
+    """올린 파일에서 수업을 뽑음. 포털 PDF는 AI 없이 바로 읽고, 그 밖의 PDF·이미지는 Gemini가 읽음."""
+    if data[:5] == b"%PDF-":
+        from . import portal_timetable
+        rows = normalize(portal_timetable.parse(data))
+        if rows:
+            return {"classes": rows, "source": "portal"}
+        mime = "application/pdf"
+    return {"classes": extract_from_image(data, mime), "source": "ai"}
+
+
 def extract_from_image(data: bytes, mime: str) -> list:
     cfg = config.load()
     if not cfg.get("gemini_api_key"):
@@ -71,8 +92,10 @@ def extract_from_image(data: bytes, mime: str) -> list:
     resp = client.models.generate_content(
         model=cfg.get("model") or "gemini-3.8-flash",
         contents=[types.Part.from_bytes(data=data, mime_type=mime),
-                  "이 대학 시간표 이미지에서 수업을 모두 뽑아줘. 같은 과목이 여러 요일·교시에 있으면 각각 따로 적어. "
-                  "교시만 적혀 있으면 표 옆의 시간 표시를 보고 실제 시각으로 바꿔. 연속된 교시는 하나로 합쳐."],
+                  "이 대학 시간표(이미지 또는 PDF)에서 수업을 모두 뽑아줘. 같은 과목이 여러 요일·교시에 있으면 각각 따로 적어. "
+                  "교시만 적혀 있으면 표 옆의 시간 표시를 보고 실제 시각으로 바꿔. 표에 시간이 없으면 이 교시표를 써: "
+                  + ", ".join(f"{i + 1}교시 {s}~{e}" for i, (s, e) in enumerate(PERIODS)) + ". "
+                  "연속된 교시는 하나로 합쳐. 과목명 뒤의 ':3C' 같은 분반 표시는 빼고, 괄호 안 이름은 교수명(prof)에 넣어."],
         config=types.GenerateContentConfig(response_mime_type="application/json",
                                            response_schema=Timetable, temperature=0.1),
     )
@@ -89,7 +112,9 @@ def today_block() -> str:
     lines = []
     for offset, label in ((0, "오늘"), (1, "내일")):
         d = (now + timedelta(days=offset)).weekday()
-        cs = [f"{c['start']}~{c['end']} {c['title']}" + (f"({c['place']})" if c["place"] else "") for c in rows if c["day"] == d]
+        cs = [f"{c['start']}~{c['end']} {c['title']}"
+              + (f"({', '.join(x for x in (c.get('prof') and c['prof'] + ' 교수', c['place']) if x)})"
+                 if c["place"] or c.get("prof") else "") for c in rows if c["day"] == d]
         lines.append(f"- {label}({DAYS[d]}): " + (", ".join(cs) if cs else "수업 없음"))
     return "\n".join(lines)
 
@@ -98,7 +123,7 @@ def summary() -> dict:
     """화면 사이드바용: 등록된 수업 수와 오늘 수업."""
     rows = get()
     d = datetime.now(KST).weekday()
-    today = [{"start": c["start"], "end": c["end"], "title": c["title"], "place": c["place"]}
+    today = [{"start": c["start"], "end": c["end"], "title": c["title"], "place": c["place"], "prof": c.get("prof", "")}
              for c in rows if c["day"] == d]
     return {"classes": len(rows), "today": today}
 
@@ -193,4 +218,5 @@ def get_timetable() -> dict:
     rows = get()
     if not rows:
         return {"classes": [], "note": "시간표가 없어요. 설정 > 시간표에서 사진으로 등록할 수 있어요."}
-    return {"classes": [f"{DAYS[c['day']]} {c['start']}~{c['end']} {c['title']} {c['place']}".strip() for c in rows]}
+    return {"classes": [f"{DAYS[c['day']]} {c['start']}~{c['end']} {c['title']} {c['place']}".strip()
+                        + (f" · {c['prof']} 교수" if c.get("prof") else "") for c in rows]}

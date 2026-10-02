@@ -19,12 +19,16 @@ from . import config
 API = "https://discord.com/api/v10"
 LIMIT = 1900   # 디스코드 메시지 최대 2000자
 EMPTY = {"token": "", "bot_username": "", "app_id": "", "owner_id": None, "owner_name": "", "link_code": "",
-          "team_channel_id": "", "team_channel_name": ""}
+          "team_channel_id": "", "team_channel_name": "", "read_channel": False}
 _state = {"gen": 0, "error": "", "ready": False, "loop": None, "client": None}
 
 HELP = ("인하 AI 비서예요. 여기서 그냥 말 걸면 돼요.\n"
         "예) 오늘 일정 알려줘 / 안 읽은 메일 요약해줘 / 장학금 공지 있어?\n\n"
         "`브리핑` 지금 브리핑 받기 · `할 일` 할 일 보기 · `도움말` 이 안내")
+
+
+INTENT_HELP = ("팀 채널 대화를 읽으려면 권한을 하나 켜야 해요. 디스코드 개발자 포털 > 내 앱 > Bot > "
+               "Privileged Gateway Intents에서 「Message Content Intent」를 켜고 저장한 뒤 다시 시도해주세요.")
 
 
 class DiscordError(Exception):
@@ -84,6 +88,7 @@ def status() -> dict:
         "error": _state["error"],
         "team_channel_id": d.get("team_channel_id", ""),
         "team_channel_name": d.get("team_channel_name", ""),
+        "read_channel": bool(d.get("read_channel")),
     }
 
 
@@ -151,11 +156,15 @@ def _make_client():
     intents = discord.Intents.none()
     intents.guilds = True        # 서버 초대 감지 (주인에게 인사 DM)
     intents.dm_messages = True   # DM 받기 — DM은 Message Content Intent 없이도 내용이 옴
+    if _cfg().get("read_channel"):
+        intents.message_content = True   # 팀 채널 대화 요약(선택): 개발자 포털에서 켜야 하는 특수 권한
     client = discord.Client(intents=intents)
 
     @client.event
     async def on_ready():
-        _state["ready"], _state["error"] = True, ""
+        _state["ready"] = True
+        if _state["error"] != INTENT_HELP:
+            _state["error"] = ""
 
     @client.event
     async def on_disconnect():
@@ -200,12 +209,17 @@ def _runner(gen: int, token: str):
         asyncio.set_event_loop(loop)
         client = _make_client()
         _state.update(loop=loop, client=client, ready=False)
-        fatal = False
+        fatal, retry_soon = False, False
         try:
             loop.run_until_complete(client.start(token))   # 연결이 끊겨도 내부에서 자동 재접속
         except discord.LoginFailure:
             _state["error"] = "봇 토큰이 올바르지 않아요. 토큰을 다시 등록해주세요."
             fatal = True
+        except discord.PrivilegedIntentsRequired:
+            # 포털에서 권한을 안 켠 채 '대화 읽기'를 켠 경우: 기능을 끄고 원래 방식(DM 전용)으로 다시 접속
+            config.save({"discord": {**_cfg(), "read_channel": False}})
+            _state["error"] = INTENT_HELP
+            retry_soon = True
         except Exception as e:
             if _state["gen"] == gen:
                 _state["error"] = f"디스코드 연결 오류: {type(e).__name__}"
@@ -219,7 +233,7 @@ def _runner(gen: int, token: str):
             loop.close()
         if fatal:
             return
-        time.sleep(30)   # 인터넷이 끊겼다면 30초 뒤 다시 시도
+        time.sleep(2 if retry_soon else 30)   # 인터넷이 끊겼다면 30초 뒤 다시 시도
 
 
 def restart():
@@ -327,3 +341,74 @@ def send_team_safe(text: str):
         send_team(text)
     except Exception as e:
         _state["error"] = f"팀 채널 전송 실패: {e}"
+
+
+# ---------- 팀 채널 대화 읽기 (선택 기능) ----------
+def set_read_channel(on: bool) -> dict:
+    """팀 채널 대화 읽기 켜기/끄기. 켜면 봇이 다시 접속하면서 Message Content Intent를 요청함."""
+    d = _cfg()
+    if on and not d.get("team_channel_id"):
+        raise DiscordError("먼저 팀 채널을 골라 저장해주세요.")
+    config.save({"discord": {**d, "read_channel": bool(on)}})
+    restart()
+    return status()
+
+
+def format_messages(raw: list, max_chars: int = 12000) -> list:
+    """[(작성자, 시각, 내용, 봇 여부)] → 요약용 목록. 봇 메시지는 빼고, 너무 길면 최근 것만 남김."""
+    out, total = [], 0
+    for author, when, text, is_bot in reversed(raw):
+        text = (text or "").strip()
+        if is_bot or not text:
+            continue
+        text = text[:600]
+        total += len(text) + len(author) + 16
+        if total > max_chars:
+            break
+        out.append({"author": author, "time": when, "text": text})
+    return list(reversed(out))
+
+
+def fetch_team_messages(hours: int = 24, limit: int = 300) -> dict:
+    from datetime import datetime, timedelta, timezone
+    d = _cfg()
+    if not d.get("read_channel"):
+        raise DiscordError("팀 채널 대화 읽기가 꺼져 있어요. 설정 > 메신저 > 디스코드에서 켤 수 있어요.")
+    cid = d.get("team_channel_id")
+    if not cid:
+        raise DiscordError("팀 채널이 설정되지 않았어요. 설정 > 메신저에서 팀 채널을 골라주세요.")
+    loop, client = _state.get("loop"), _state.get("client")
+    if not (loop and client and _state["ready"]):
+        raise DiscordError(_state["error"] or "디스코드 봇이 아직 접속 중이에요. 잠시 후 다시 시도해주세요.")
+    hours = max(1, min(int(hours), 24 * 14))
+    kst = timezone(timedelta(hours=9))
+    after = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    async def go():
+        import discord
+        ch = client.get_channel(int(cid)) or await client.fetch_channel(int(cid))
+        raw, seen, attach_only = [], 0, 0
+        try:
+            async for m in ch.history(limit=limit, after=after, oldest_first=True):
+                seen += 1
+                text = m.content or ""
+                if not text and (m.attachments or m.embeds):
+                    attach_only += 1
+                    text = "[첨부파일]"
+                raw.append((m.author.display_name, m.created_at.astimezone(kst).strftime("%m/%d %H:%M"),
+                            text, bool(m.author.bot)))
+        except discord.Forbidden:
+            raise DiscordError("봇이 그 채널을 볼 권한이 없어요. 채널 설정에서 봇에게 「채널 보기」와 "
+                               "「메시지 기록 보기」를 허용해주세요.")
+        return raw, seen, attach_only
+    try:
+        raw, seen, attach_only = asyncio.run_coroutine_threadsafe(go(), loop).result(timeout=40)
+    except DiscordError:
+        raise
+    except Exception as e:
+        raise DiscordError(f"대화를 가져오지 못했어요: {type(e).__name__}")
+    human = [r for r in raw if not r[3]]
+    if human and all(not r[2] for r in human):
+        raise DiscordError(INTENT_HELP)   # 메시지는 있는데 내용이 비어 옴 → 권한이 꺼져 있음
+    return {"channel": d.get("team_channel_name", ""), "hours": hours, "messages": format_messages(raw),
+            "total_seen": seen}

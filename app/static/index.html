@@ -47,6 +47,7 @@
       <button class="quick" data-q="이번 학기 학사일정에서 수강신청·시험·등록금처럼 내가 챙겨야 할 날짜를 알려줘.">학사일정 챙기기</button>
       <button class="quick" data-q="내 학과·학년·관심사에 맞는 학교 공지(공모전, 장학, 비교과, 특강)를 찾아서 마감일과 혜택을 함께 알려줘.">나에게 맞는 공지</button>
       <button class="quick" data-q="최근 일주일 메일과 학교 공지에서 챙겨야 할 일정(회의, 발표, 마감일)을 찾아줘.">메일·공지에서 일정 찾기</button>
+      <button class="quick hidden" id="q-team" data-q="디스코드 팀 채널의 최근 하루 대화를 요약해줘. 결정된 것, 내가 할 일, 일정, 아직 안 정해진 것으로 정리해줘.">팀 채널 요약</button>
     </section>
 
     <div class="side-bottom">
@@ -185,7 +186,7 @@
           <li>“장학금 공지 중에 지금 신청할 수 있는 거 알려줘”</li>
           <li>“금요일 오후 2시에 팀플 회의 일정 넣어줘”</li>
         </ul>
-        <div class="note safe"><b>수업 시간표도 등록해 보세요.</b> 시간표 캡처 한 장이면 돼요. 브리핑에 오늘 수업이 나오고, 빈 시간을 찾을 때 수업을 피해요.
+        <div class="note safe"><b>수업 시간표도 등록해 보세요.</b> 포털 시간표 PDF나 캡처 한 장이면 돼요. 브리핑에 오늘 수업이 나오고, 빈 시간을 찾을 때 수업을 피해요.
           <div><button class="ghost sm" id="wiz-tt" type="button">시간표 등록하러 가기</button></div></div>
       </section>
     </div>
@@ -294,9 +295,19 @@
           <p class="muted">DM에서 그냥 말 걸면 돼요. <code>브리핑</code> 지금 브리핑, <code>할 일</code> 할 일 보기, <code>도움말</code>. 주인으로 등록된 계정 외에는 응답하지 않아요.</p>
           <div class="row"><button class="sm" id="dc-test">테스트 메시지 보내기</button><button class="ghost sm danger" id="dc-off">연결 해제</button></div>
           <div id="dc-team">
-            <h4>팀 채널 (보내기 전용)</h4>
+            <h4>팀 채널</h4>
             <p class="muted" id="dc-team-now"></p>
             <div class="keyrow"><select id="dc-team-sel"></select><button class="sm" id="dc-team-save" type="button">저장</button></div>
+            <h4>팀 채널 대화 요약 <span class="opt">선택</span></h4>
+            <label class="check"><input type="checkbox" id="dc-read"> 팀 채널 대화를 읽고 요약하기</label>
+            <p class="muted">켜면 "팀 채널 요약해줘"라고 했을 때 최근 대화를 읽어 결정된 것·할 일·일정으로 정리해요. 대화는 요약할 때만 Gemini로 보내고 따로 저장하지 않아요. <b>다른 사람의 대화가 포함되니 팀원에게 미리 알려주세요.</b></p>
+            <details class="trouble"><summary>켜기 전에 한 번만: 디스코드에서 권한 켜기</summary>
+              <ol>
+                <li><a href="https://discord.com/developers/applications" target="_blank" rel="noopener">디스코드 개발자 포털</a>에서 내 앱 → 왼쪽 「Bot」</li>
+                <li>아래쪽 Privileged Gateway Intents의 <b>「Message Content Intent」</b>를 켜고 「Save Changes」</li>
+                <li>여기로 돌아와 위 체크박스를 켜요</li>
+              </ol></details>
+            <div class="result" id="dc-read-result"></div>
           </div>
         </div>
         <div class="result" id="dc-result"></div>
@@ -335,7 +346,7 @@
   <div class="modal xwide tt-modal">
     <div class="modal-head"><div><h3>수업 시간표</h3><small class="muted">브리핑에 오늘 수업이 나오고, 빈 시간을 찾을 때 수업 시간을 피해요.</small></div>
       <div class="row">
-        <label class="btn-sm" id="tt-photo-btn"><input type="file" id="tt-file" accept="image/*" hidden>사진으로 한 번에 등록</label>
+        <label class="btn-sm" id="tt-photo-btn"><input type="file" id="tt-file" accept="image/*,.pdf,application/pdf" hidden>PDF·사진으로 한 번에 등록</label>
         <button class="ghost sm" id="tt-add" type="button">+ 수업 추가</button>
         <button class="ghost sm" id="tt-close" type="button">닫기</button>
       </div></div>
@@ -355,8 +366,8 @@
       <div class="ttg" id="tt-grid"></div>
       <div class="tt-empty hidden" id="tt-empty">
         <b>아직 등록된 수업이 없어요</b>
-        <p>학교 포털이나 에브리타임 시간표를 캡처해서 올리면 AI가 읽어서 채워줘요.<br>캡처 이미지를 이 창에 끌어다 놓아도 돼요.</p>
-        <div class="row center"><label class="btn-sm" for="tt-file">시간표 사진 올리기</label><button class="ghost sm" id="tt-add2" type="button">직접 추가</button></div>
+        <p><b>포털 &gt; 개인수업시간표조회</b> 화면을 PDF로 저장해서 올리면 교시·강의실·교수명까지 바로 채워져요.<br>에브리타임 같은 시간표 캡처 이미지도 AI가 읽어줘요. 이 창에 끌어다 놓아도 돼요.</p>
+        <div class="row center"><label class="btn-sm" for="tt-file">시간표 PDF·사진 올리기</label><button class="ghost sm" id="tt-add2" type="button">직접 추가</button></div>
       </div>
     </div>
     <div class="sched-foot muted">빈 칸을 누르면 그 시간에 수업을 추가하고, 수업을 누르면 고치거나 지울 수 있어요. 바꾼 내용은 바로 저장돼요.</div>
@@ -371,10 +382,18 @@
       <label>과목명<input id="te-title" placeholder="예: 자료구조" maxlength="60" required></label>
       <div class="grid3">
         <label>요일<select id="te-day"><option value="0">월요일</option><option value="1">화요일</option><option value="2">수요일</option><option value="3">목요일</option><option value="4">금요일</option><option value="5">토요일</option><option value="6">일요일</option></select></label>
-        <label>시작<input type="time" id="te-start" step="300" required></label>
-        <label>끝<input type="time" id="te-end" step="300" required></label>
+        <label>시작 교시<select id="te-ps"></select></label>
+        <label>끝 교시<select id="te-pe"></select></label>
       </div>
-      <label>강의실 <span class="muted">(선택)</span><input id="te-place" placeholder="예: 6호관 401호" maxlength="40"></label>
+      <div class="grid3">
+        <span class="muted hint">교시와 다르면 시각을 직접 고치세요</span>
+        <label>시작 시각<input type="time" id="te-start" step="300" required></label>
+        <label>끝 시각<input type="time" id="te-end" step="300" required></label>
+      </div>
+      <div class="grid2">
+        <label>강의실<input id="te-place" placeholder="선택 · 예: 7호관 301호" maxlength="40"></label>
+        <label>교수명<input id="te-prof" placeholder="선택 · 예: 홍길동" maxlength="20"></label>
+      </div>
       <div class="result" id="te-result"></div>
       <div class="row">
         <button class="ghost sm danger hidden" id="te-del" type="button">이 수업 지우기</button>
