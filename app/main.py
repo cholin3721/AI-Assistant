@@ -606,6 +606,14 @@ def schedule_add(cid: str, body: CandidateEdit):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/schedule/{cid}/todo")
+def schedule_todo(cid: str, body: CandidateEdit):
+    try:
+        return schedule_finder.add_to_todo(cid, body.model_dump())
+    except schedule_finder.ScanError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/schedule/{cid}/ignore")
 def schedule_ignore(cid: str):
     try:

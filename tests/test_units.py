@@ -204,5 +204,56 @@ class DiscordTeamChat(unittest.TestCase):
         long = [("a", "t", "가" * 600, False)] * 50
         self.assertLess(sum(len(m["text"]) for m in db.format_messages(long, max_chars=3000)), 3000)
 
+
+class CalendarBusy(unittest.TestCase):
+    """빈 시간 계산은 일정 목록(calendar.events 권한)만으로 바쁜 시간을 만든다."""
+    def test_busy_from_events(self):
+        from app.timetable import busy_from_events
+        ev = lambda title, s, e, **kw: {"summary": title, "start": {"dateTime": s}, "end": {"dateTime": e}, **kw}
+        items = [
+            ev("팀 회의", "2026-10-05T10:00:00+09:00", "2026-10-05T11:00:00+09:00"),
+            ev("UTC 표기", "2026-10-05T04:00:00Z", "2026-10-05T05:00:00Z"),
+            ev("취소됨", "2026-10-05T12:00:00+09:00", "2026-10-05T13:00:00+09:00", status="cancelled"),
+            ev("한가함 표시", "2026-10-05T12:00:00+09:00", "2026-10-05T13:00:00+09:00", transparency="transparent"),
+            ev("거절한 초대", "2026-10-05T15:00:00+09:00", "2026-10-05T16:00:00+09:00",
+               attendees=[{"self": True, "responseStatus": "declined"}]),
+            {"summary": "출품 마감", "start": {"date": "2026-10-05"}, "end": {"date": "2026-10-06"}},
+        ]
+        busy, all_day = busy_from_events(items)
+        self.assertEqual([(s.strftime("%H:%M"), e.strftime("%H:%M"), t) for s, e, t in busy],
+                         [("10:00", "11:00", "팀 회의"), ("13:00", "14:00", "UTC 표기")])
+        self.assertEqual(all_day, ["출품 마감"])
+
+
+class SavedHistory(unittest.TestCase):
+    """프로그램을 다시 켜도 AI가 직전 대화를 이어받는다."""
+    def _run(self, msgs):
+        from unittest import mock
+        from app import agent
+        with mock.patch("app.chats.get", return_value=msgs):
+            return [(c.role, c.parts[0].text) for c in agent._saved_history("s1")]
+
+    def test_pairs_restored(self):
+        h = self._run([{"role": "user", "text": "지도교수님은 김철수 교수님이야"}, {"role": "bot", "text": "기억할게요"},
+                       {"role": "user", "text": "고마워"}, {"role": "bot", "text": "네!"}])
+        self.assertEqual([r for r, _ in h], ["user", "model", "user", "model"])
+        self.assertIn("김철수", h[0][1])
+
+    def test_broken_pairs_are_dropped(self):
+        h = self._run([{"role": "bot", "text": "앞이 잘린 답"}, {"role": "user", "text": "응답 없이 끝난 질문"},
+                       {"role": "user", "text": "질문"}, {"role": "bot", "text": "답"}, {"role": "user", "text": "마지막 질문"}])
+        self.assertEqual(h, [("user", "질문"), ("model", "답")])
+
+    def test_long_and_many(self):
+        from app import agent
+        msgs = []
+        for i in range(30):
+            msgs += [{"role": "user", "text": f"q{i} " + "가" * 5000}, {"role": "bot", "text": f"a{i}"}]
+        h = self._run(msgs)
+        self.assertEqual(len(h), agent.RESTORE_MSGS)
+        self.assertTrue(h[0][1].startswith("q24") and len(h[0][1]) <= agent.RESTORE_CHARS)
+        self.assertEqual(h[-1], ("model", "a29"))
+
+
 if __name__ == "__main__":
     unittest.main()

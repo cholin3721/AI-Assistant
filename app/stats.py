@@ -23,12 +23,12 @@ MINUTES = {
     "tool:find_events_in_emails": 5, "tool:find_events_in_notices": 10, "tool:get_academic_calendar": 2,
     "notify:briefing": 10, "notify:weekly": 15, "notify:reminder": 2,
     "tool:read_team_chat": 10,
-    "candidate_added": 2, "form_draft": 30, "form_rewrite": 2,
+    "candidate_added": 2, "candidate_todo": 2, "form_draft": 30, "form_rewrite": 2,
 }
 MINUTE_LABELS = [
     ("아침 브리핑 1회", 10), ("주간 회고 1회", 15), ("마감 알림 1건", 2), ("공지 목록 확인", 3),
     ("공지 첨부 읽기", 5), ("공지에서 일정 찾기", 10), ("메일 답장 초안", 5), ("빈 시간 찾기", 5),
-    ("일정 후보를 캘린더에 추가", 2), ("신청서 초안 1건", 30),
+    ("일정 후보를 캘린더·할 일에 저장", 2), ("신청서 초안 1건", 30),
 ]
 TOOL_NAMES = {
     "search_emails": "메일 검색", "read_email": "메일 읽기", "read_email_attachment": "메일 첨부 읽기",
@@ -125,6 +125,7 @@ def summary(period_days: int = 30, now: datetime | None = None) -> dict:
             "briefings": t.get("notify:briefing", 0) + t.get("notify:weekly", 0),
             "candidates_found": g("candidate_found"),
             "candidates_added": t.get("candidate_added", 0),
+            "candidates_todo": t.get("candidate_todo", 0),
             "email_drafts": t.get("tool:create_email_draft", 0),
             "form_drafts": t.get("form_draft", 0),
             "todos_done": t.get("todo_done", 0),

@@ -40,14 +40,17 @@
 
     <section class="block">
       <h4>바로 해보기</h4>
-      <button class="quick" data-q="오늘의 브리핑을 해줘. 오늘 일정과 수업, 안 읽은 중요한 메일, 답장해야 할 메일, 3일 안 마감, 최근 학교 공지 중 나에게 맞는 것을 정리해줘.">오늘의 브리핑</button>
-      <button class="quick" data-q="안 읽은 메일을 중요한 것 위주로 요약해줘.">안 읽은 메일 요약</button>
-      <button class="quick" data-q="내가 답장 안 한 메일이랑, 내가 보냈는데 답이 없는 메일을 찾아줘. 필요하면 초안도 제안해줘.">답장 챙기기</button>
+      <button class="quick hidden" data-need="google" data-q="오늘의 브리핑을 해줘. 오늘 일정과 수업, 안 읽은 중요한 메일, 답장해야 할 메일, 3일 안 마감, 최근 학교 공지 중 나에게 맞는 것을 정리해줘.">오늘의 브리핑</button>
+      <button class="quick" data-need="nogoogle" data-q="오늘의 브리핑을 해줘. 오늘 수업, 내 할 일, 3일 안 마감, 다가오는 학사일정, 최근 학교 공지 중 나에게 맞는 것을 정리해줘.">오늘의 브리핑</button>
+      <button class="quick hidden" data-need="google" data-q="안 읽은 메일을 중요한 것 위주로 요약해줘.">안 읽은 메일 요약</button>
+      <button class="quick hidden" data-need="google" data-q="내가 답장 안 한 메일이랑, 내가 보냈는데 답이 없는 메일을 찾아줘. 필요하면 초안도 제안해줘.">답장 챙기기</button>
       <button class="quick" data-q="이번 주에 1시간짜리 팀 회의를 잡을 수 있는 빈 시간을 찾아줘.">이번 주 빈 시간</button>
       <button class="quick" data-q="이번 학기 학사일정에서 수강신청·시험·등록금처럼 내가 챙겨야 할 날짜를 알려줘.">학사일정 챙기기</button>
       <button class="quick" data-q="내 학과·학년·관심사에 맞는 학교 공지(공모전, 장학, 비교과, 특강)를 찾아서 마감일과 혜택을 함께 알려줘.">나에게 맞는 공지</button>
-      <button class="quick" data-q="최근 일주일 메일과 학교 공지에서 챙겨야 할 일정(회의, 발표, 마감일)을 찾아줘.">메일·공지에서 일정 찾기</button>
+      <button class="quick hidden" data-need="google" data-q="최근 일주일 메일과 학교 공지에서 챙겨야 할 일정(회의, 발표, 마감일)을 찾아줘.">메일·공지에서 일정 찾기</button>
+      <button class="quick" data-need="nogoogle" data-q="최근 일주일 학교 공지에서 챙겨야 할 일정(신청 마감, 행사, 설명회)을 찾아줘.">공지에서 일정 찾기</button>
       <button class="quick hidden" id="q-team" data-q="디스코드 팀 채널의 최근 하루 대화를 요약해줘. 결정된 것, 내가 할 일, 일정, 아직 안 정해진 것으로 정리해줘.">팀 채널 요약</button>
+      <button class="quick more" data-need="nogoogle" id="q-google" type="button">+ 메일·캘린더도 연결하기</button>
     </section>
 
     <div class="side-bottom">
@@ -62,9 +65,10 @@
     <div class="messages" id="messages">
       <div class="empty" id="empty">
         <h2>무엇을 도와드릴까요?</h2>
-        <p>메일·일정·드라이브·학교 공지·할 일을 한 번에 물어보세요. 마이크 버튼으로 말해도 돼요.</p>
+        <p>학교 공지·학사일정·시간표·할 일을 한 번에 물어보세요. 구글을 연결하면 메일·캘린더·드라이브도 돼요. 마이크 버튼으로 말해도 돼요.</p>
         <div class="examples">
-          <button class="ex" data-q="교수님한테 온 메일 있어? 있으면 요약하고 답장 초안 만들어줘">교수님 메일 확인하고 답장 초안 만들어줘</button>
+          <button class="ex hidden" data-need="google" data-q="교수님한테 온 메일 있어? 있으면 요약하고 답장 초안 만들어줘">교수님 메일 확인하고 답장 초안 만들어줘</button>
+          <button class="ex" data-need="nogoogle" data-q="내 학과·학년·관심사에 맞는 학교 공지(공모전, 장학, 비교과, 특강)를 찾아서 마감일과 혜택을 함께 알려줘.">나에게 맞는 학교 공지 찾아줘</button>
           <button class="ex" data-q="AID 아이디어 공모전 신청하려면 뭐 해야 돼? 체크리스트 만들어줘">공모전 신청 체크리스트 만들어줘</button>
           <button class="ex" data-q="다음 주에 팀플 회의 2시간 할 수 있는 시간 추천해줘">다음 주 팀플 회의 시간 추천해줘</button>
           <button class="ex" data-q="AID 아이디어 공모전 공지에 있는 참가신청서·출품보고서 양식으로 초안 만들어줘">공모전 신청서 초안 써줘</button>
@@ -85,24 +89,27 @@
   <div class="wiz">
     <div class="wiz-head">
       <ol class="steps" id="steps">
-        <li>시작</li><li>내 정보</li><li>Gemini 키</li><li>구글 연동</li><li>완료</li>
+        <li>시작</li><li>내 정보</li><li>AI 키</li><li>완료</li>
       </ol>
+      <b class="wiz-title hidden" id="wiz-title">구글 연결 가이드 <span class="opt">선택</span></b>
     </div>
     <div class="wiz-body">
 
       <!-- 0. 시작 -->
       <section class="page" data-page="0">
-        <h2>안녕하세요! 3단계면 내 AI 비서가 준비돼요</h2>
-        <p class="lead">메일, 일정, 드라이브, 학교 공지를 한곳에서 물어보고 정리받을 수 있어요. <b>구글 연동 없이도</b> 학교 공지·학사일정·할 일·시간표·신청서 도우미는 바로 됩니다.</p>
+        <h2>안녕하세요! 2분이면 내 AI 비서가 준비돼요</h2>
+        <p class="lead">무료 AI 키 하나만 넣으면 바로 쓸 수 있어요. 메일·캘린더 연결은 <b>필요해질 때</b> 하면 돼요.</p>
         <ul class="feat">
-          <li><b>메일</b> 안 읽은 메일 요약, 답장 초안 작성 (자동 발송은 절대 안 해요)</li>
-          <li><b>일정</b> 이번 주 일정 정리, 말로 일정 등록</li>
-          <li><b>드라이브</b> 문서 찾고 요약</li>
           <li><b>학교 공지</b> 내 학과·관심사에 맞는 공모전·장학·특강 추천, 한글(hwp) 첨부까지 읽기</li>
-          <li><b>먼저 챙기기</b> 아침 브리핑, 마감 D-3·D-1 알림, 답장 안 한 메일 — 폰(텔레그램)으로도</li>
-          <li><b>나를 기억</b> 지도교수·팀원 연락처, 시간표, 할 일</li>
+          <li><b>신청 준비</b> 신청 체크리스트, 신청서·보고서 초안</li>
+          <li><b>학사일정·시간표·할 일</b> 수강신청·시험 날짜, 포털 시간표 PDF 등록, 빈 시간 찾기</li>
+          <li><b>먼저 챙기기</b> 아침 브리핑, 마감 D-3·D-1 알림 — 디스코드로도</li>
+          <li><b>나를 기억</b> 지도교수·팀원 연락처처럼 말해 둔 것</li>
+          <li class="muted"><b>구글을 연결하면</b> 메일 요약·답장 초안(자동 발송 없음), 캘린더, 드라이브까지</li>
         </ul>
-        <div class="note safe"><b>안심하세요.</b> 입력하는 키와 구글 로그인 정보는 이 PC의 <code>data</code> 폴더에만 저장되고, 어떤 서버로도 보내지 않아요.</div>
+        <div class="note safe"><b>내 정보는 어디로 가나요?</b> 키·구글 로그인 정보·대화 기록·시간표는 이 PC의 <code>data</code> 폴더에만 저장돼요.
+          다만 답을 만들려면 질문과 읽어 온 내용(공지, 연결했다면 메일·일정)이 <b>Google Gemini</b>로 전송돼요.
+          비서를 만든 사람이나 그 밖의 서버로는 보내지 않아요. 디스코드·텔레그램을 연결하면 알림이 그 메신저로도 가요.</div>
       </section>
 
       <!-- 1. 내 정보 -->
@@ -133,6 +140,9 @@
           <button id="key-check" type="button">확인</button>
         </div>
         <div class="result" id="key-result"></div>
+        <div class="note warnbox"><b>무료 키를 쓸 때 알아둘 점.</b> 구글 약관상 무료 키로 보낸 내용은 구글이 서비스 개선에 쓸 수 있고, 사람이 검토할 수도 있어요.
+          민감한 메일까지 맡기려면 AI Studio에서 결제를 등록한 유료 키를 쓰세요. (유료 키는 서비스 개선에 쓰지 않는다고 안내돼 있어요.)
+          <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">약관 보기 ↗</a></div>
         <details class="trouble"><summary>잘 안 되나요?</summary>
           <ul>
             <li><b>학교 계정(@inhatc.ac.kr)에서 AI Studio가 안 열리면</b> 개인 Gmail 계정으로 로그인해보세요. 학교 계정은 관리자 설정으로 막혀 있을 수 있어요.</li>
@@ -145,7 +155,9 @@
       <!-- 3. 구글 연동 -->
       <section class="page" data-page="3">
         <h2>Gmail · 캘린더 · 드라이브 연결 <span class="time">약 5분 · 처음 한 번만</span></h2>
-        <p class="lead">나만 쓰는 '구글 연결 통로'를 만드는 과정이에요. <b>건너뛰어도</b> 학교 공지·학사일정·신청서 도우미는 쓸 수 있어요. 순서대로 따라 하고 각 단계의 체크를 눌러주세요. <b>개인 Gmail 계정</b>을 추천해요.</p>
+        <p class="lead">나만 쓰는 '구글 연결 통로'를 만드는 과정이에요. 안 해도 학교 공지·학사일정·시간표·신청서 도우미는 그대로 쓸 수 있어요. 순서대로 따라 하고 각 단계의 체크를 눌러주세요. <b>개인 Gmail 계정</b>을 추천해요.</p>
+        <div class="note safe"><b>팀원에게 열쇠 파일을 받았나요?</b> <code>client_secret_….json</code> 파일을 받았다면 1~5번은 건너뛰고 <b>6번부터</b> 하면 돼요.
+          단, 파일을 만든 팀원이 내 Gmail 주소를 4번(테스트 사용자)에 추가해 줘야 로그인이 돼요.</div>
         <ol class="howto check" id="g-steps">
           <li><input type="checkbox"><div><b>프로젝트 만들기</b> — 이름은 <code>AI-Assistant</code>처럼 아무거나 넣고 「만들기」.
             <a class="btn-link" href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">프로젝트 만들기 열기 ↗</a></div></li>
@@ -180,14 +192,12 @@
         <h2>준비 완료!</h2>
         <p class="lead" id="done-summary"></p>
         <p>이렇게 말해보세요.</p>
-        <ul class="feat">
-          <li>“오늘의 브리핑 해줘”</li>
-          <li>“안 읽은 메일 중에 답장해야 하는 거 있어?”</li>
-          <li>“장학금 공지 중에 지금 신청할 수 있는 거 알려줘”</li>
-          <li>“금요일 오후 2시에 팀플 회의 일정 넣어줘”</li>
-        </ul>
+        <ul class="feat" id="done-examples"></ul>
         <div class="note safe"><b>수업 시간표도 등록해 보세요.</b> 포털 시간표 PDF나 캡처 한 장이면 돼요. 브리핑에 오늘 수업이 나오고, 빈 시간을 찾을 때 수업을 피해요.
           <div><button class="ghost sm" id="wiz-tt" type="button">시간표 등록하러 가기</button></div></div>
+        <div class="note plain" id="done-google"><b>메일·캘린더·드라이브도 맡기고 싶다면</b> 구글을 연결하세요 (선택, 약 5분). 지금 안 해도 되고, 메일 기능을 처음 쓸 때 다시 안내해 드려요.
+          <div><button class="ghost sm" id="wiz-google" type="button">지금 연결하기</button></div></div>
+        <p class="muted small">아침 브리핑·마감 알림은 이 프로그램이 켜져 있을 때만 와요. PC를 켤 때 자동으로 실행하려면 폴더의 <code>autostart_on.bat</code>을 한 번 실행하세요.</p>
       </section>
     </div>
     <div class="wiz-foot">
@@ -425,7 +435,7 @@
 <!-- 메일에서 찾은 일정 -->
 <div class="overlay hidden" id="sched">
   <div class="modal wide">
-    <div class="modal-head"><div><h3>일정 후보</h3><small class="muted">AI가 찾은 후보예요. 확인하고 「캘린더에 추가」를 눌러야 등록돼요.</small></div><button class="ghost sm" id="sched-close">닫기</button></div>
+    <div class="modal-head"><div><h3>일정 후보</h3><small class="muted">AI가 찾은 후보예요. 확인하고 「캘린더에 추가」나 「할 일에 저장」을 눌러야 저장돼요.</small></div><button class="ghost sm" id="sched-close">닫기</button></div>
     <div class="sched-bar">
       <select id="sched-days"><option value="3">최근 3일</option><option value="7" selected>최근 7일</option><option value="14">최근 14일</option><option value="30">최근 30일</option></select>
       <button class="sm" id="sched-scan" type="button">새 메일 확인</button>

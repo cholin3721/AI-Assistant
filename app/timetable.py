@@ -129,18 +129,46 @@ def summary() -> dict:
 
 
 # ---------- 빈 시간 계산 ----------
-def _busy_from_calendar(start: datetime, end: datetime) -> list:
+def busy_from_events(items: list) -> tuple:
+    """캘린더 일정 목록 → (바쁜 시간 [(시작, 끝, 제목)], 제외한 종일 일정 제목들).
+    취소·거절한 일정과 '한가함'으로 표시한 일정은 빼고, 종일 일정(마감일 등)은 시간을 막지 않습니다."""
+    busy, all_day = [], []
+    for e in items:
+        if e.get("status") == "cancelled" or e.get("transparency") == "transparent":
+            continue
+        if any(a.get("self") and a.get("responseStatus") == "declined" for a in e.get("attendees") or []):
+            continue
+        s, en = e.get("start") or {}, e.get("end") or {}
+        title = e.get("summary") or "일정"
+        if "dateTime" not in s or "dateTime" not in en:
+            all_day.append(title)
+            continue
+        try:
+            a = datetime.fromisoformat(s["dateTime"].replace("Z", "+00:00")).astimezone(KST)
+            b = datetime.fromisoformat(en["dateTime"].replace("Z", "+00:00")).astimezone(KST)
+        except ValueError:
+            continue
+        if b > a:
+            busy.append((a, b, title))
+    return busy, all_day
+
+
+def _busy_from_calendar(start: datetime, end: datetime) -> tuple:
+    """구글 캘린더에서 바쁜 시간을 읽습니다. 일정 조회 권한(calendar.events)만으로 되도록
+    freebusy 대신 일정 목록을 씁니다."""
     if google_auth.get_credentials() is None:
-        return []
+        return [], []
     svc = google_service("calendar", "v3")
-    res = svc.freebusy().query(body={"timeMin": start.isoformat(), "timeMax": end.isoformat(),
-                                     "timeZone": "Asia/Seoul", "items": [{"id": "primary"}]}).execute()
-    busy = []
-    for b in res.get("calendars", {}).get("primary", {}).get("busy", []):
-        s = datetime.fromisoformat(b["start"].replace("Z", "+00:00")).astimezone(KST)
-        e = datetime.fromisoformat(b["end"].replace("Z", "+00:00")).astimezone(KST)
-        busy.append((s, e, "일정"))
-    return busy
+    items, token = [], None
+    for _ in range(5):
+        res = svc.events().list(calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(),
+                                singleEvents=True, orderBy="startTime", maxResults=250, timeZone="Asia/Seoul",
+                                pageToken=token).execute()
+        items += res.get("items", [])
+        token = res.get("nextPageToken")
+        if not token:
+            break
+    return busy_from_events(items)
 
 
 def free_slots(days_ahead: int, duration_minutes: int, earliest: str, latest: str,
@@ -192,10 +220,12 @@ def find_free_time(days_ahead: int = 7, duration_minutes: int = 60, earliest: st
     """
     now = datetime.now(KST)
     end = now + timedelta(days=int(days_ahead) + 1)
+    connected = google_auth.get_credentials() is not None
+    busy, all_day, cal_error = [], [], ""
     try:
-        busy = _busy_from_calendar(now, end)
-    except ToolError:
-        busy = []
+        busy, all_day = _busy_from_calendar(now, end)
+    except Exception as e:  # 권한·네트워크 문제여도 시간표만으로 계속 찾고, 못 읽은 사실은 알려준다
+        cal_error = str(e)[:160]
     try:
         from .tools.academic import busy_ranges
         extra = [(s, e) for s, e, _ in busy_ranges(now, end)]
@@ -204,11 +234,20 @@ def find_free_time(days_ahead: int = 7, duration_minutes: int = 60, earliest: st
     slots = free_slots(days_ahead, duration_minutes, earliest, latest, include_weekends,
                        busy, get(), now, extra_busy=extra)
     fmt = lambda s, e: f"{s.month}/{s.day}({DAYS[s.weekday()]}) {s:%H:%M}~{e:%H:%M} ({int((e - s).total_seconds() // 60)}분)"
+    notes = []
+    if not get():
+        notes.append("시간표가 등록되지 않아 수업 시간은 고려하지 못했어요. 화면 왼쪽 「시간표」에서 등록할 수 있어요.")
+    if cal_error:
+        notes.append("구글 캘린더를 읽지 못해 캘린더 일정은 고려하지 못했어요. 사용자에게 꼭 알려주세요. (" + cal_error + ")")
+    elif not connected:
+        notes.append("구글 캘린더가 연결되지 않아 수업·학사일정만 보고 찾았어요.")
+    if all_day:
+        notes.append("종일 일정은 시간을 막지 않는 것으로 봤어요: " + ", ".join(all_day[:8]))
     return {
-    "used": {"calendar": google_auth.get_credentials() is not None, "timetable_classes": len(get()),
-             "academic_busy": len(extra)},
+        "used": {"calendar": connected and not cal_error, "calendar_events": len(busy),
+                 "timetable_classes": len(get()), "academic_busy": len(extra)},
         "free_slots": [fmt(s, e) for s, e in slots[:20]],
-        "note": "" if get() else "시간표가 등록되지 않아 수업 시간은 고려하지 못했어요. 설정 > 시간표에서 등록할 수 있어요.",
+        "note": " ".join(notes),
     }
 
 

@@ -344,3 +344,16 @@ label.btn-sm.busy{opacity:.6;pointer-events:none}
   .grid3{grid-template-columns:1fr 1fr}
   .grid3 label:first-child{grid-column:1/-1}
 }
+
+/* 첫 실행 간소화 · 구글 연결 안내 */
+.wiz-title{display:block;font-size:15px}
+.note.warnbox{background:color-mix(in srgb,var(--warn) 9%,transparent);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}
+.note.plain{border:1px solid var(--line)}
+.note.plain .ghost{margin-top:8px}
+.small{font-size:13px}
+.page>.small{margin-top:12px}
+.note+.howto,.note+details{margin-top:12px}
+.feat li.muted{font-size:inherit}
+.quick.more{border-style:dashed;opacity:.85}
+.connect-card{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;padding:12px 14px;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);background:var(--accent-weak);border-radius:10px;font-size:14px}
+.connect-card span{color:var(--muted);font-size:13px}

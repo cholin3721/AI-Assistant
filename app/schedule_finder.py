@@ -414,6 +414,38 @@ def add_to_calendar(cid: str, edits: dict | None = None) -> dict:
     return c
 
 
+def add_to_todo(cid: str, edits: dict | None = None) -> dict:
+    """일정 후보를 '내 할 일'로 저장합니다. 구글 연동 없이도 마감을 챙길 수 있게 하는 길입니다."""
+    from . import todos
+    from .tools import ToolError
+    data = _load()
+    c = data["candidates"].get(cid)
+    if c is None:
+        raise ScanError("후보를 찾을 수 없어요. 새로고침 해주세요.")
+    if c["status"] in ("added", "todo"):
+        return c
+    for k in ("title", "start", "end", "location"):
+        if edits and edits.get(k) is not None:
+            c[k] = str(edits[k]).strip()
+    s = _parse_dt(c["start"])
+    if s is None:
+        raise ScanError("시작 날짜 형식이 올바르지 않아요.")
+    c["all_day"] = len(c["start"]) == 10
+    when = "" if c["all_day"] else f"{s:%H:%M} "
+    where = "학교 공지" if c.get("source") == "notice" else "메일"
+    note = f"{when}{c.get('location', '')}".strip()
+    note = (note + " · " if note else "") + f"{where}: {c['mail_subject']}"
+    try:
+        item = todos.add(c["title"], due=s.strftime("%Y-%m-%d"), note=note, link=c.get("mail_link", ""))
+    except ToolError as e:
+        raise ScanError(str(e))
+    c["status"], c["todo_id"] = "todo", item["id"]
+    _save(data)
+    from . import stats
+    stats.record("candidate_todo")
+    return c
+
+
 def ignore(cid: str) -> dict:
     data = _load()
     c = data["candidates"].get(cid)

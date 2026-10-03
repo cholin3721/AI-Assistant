@@ -183,10 +183,38 @@ def reset_all():
         _sessions.clear()
 
 
-def _new_session(cfg: dict, model: str) -> dict:
+RESTORE_MSGS = 12      # 프로그램을 다시 켰을 때 AI에게 되돌려줄 최근 대화 수(메시지 기준)
+RESTORE_CHARS = 1500   # 메시지 하나당 최대 길이
+
+
+def _saved_history(session_id: str) -> list:
+    """저장해 둔 웹 대화(글자만)를 Gemini 대화 기록 형식으로. 사용자 말로 시작해 번갈아 나오도록 맞춥니다."""
+    from . import chats
+    out = []
+    for m in chats.get(session_id)[-RESTORE_MSGS:]:
+        role = "user" if m.get("role") == "user" else "model"
+        text = (m.get("text") or "").strip()[:RESTORE_CHARS]
+        if not text or (not out and role != "user"):
+            continue
+        if out and out[-1].role == role:
+            out.pop()              # 짝이 안 맞는 기록(응답 없이 끝난 질문 등)은 버림
+            if not out and role != "user":
+                continue
+        out.append(types.Content(role=role, parts=[types.Part(text=text)]))
+    while out and out[-1].role != "model":
+        out.pop()
+    return out
+
+
+def _new_session(cfg: dict, model: str, history: list | None = None) -> dict:
     client = genai.Client(api_key=cfg["gemini_api_key"])
-    return {"key": cfg["gemini_api_key"], "model": model, "client": client, "turns": 0,
-            "lock": threading.Lock(), "chat": client.chats.create(model=model, config=_config())}
+    kwargs = {"history": history} if history else {}
+    try:
+        chat_obj = client.chats.create(model=model, config=_config(), **kwargs)
+    except Exception:
+        chat_obj = client.chats.create(model=model, config=_config())
+    return {"key": cfg["gemini_api_key"], "model": model, "client": client, "turns": len(history or []) // 2,
+            "lock": threading.Lock(), "chat": chat_obj}
 
 
 def _history_text(chat_obj, limit: int = 6000) -> str:
@@ -247,9 +275,12 @@ def chat(session_id: str, message: str, on_event=None) -> dict:
         stale = (sess is None or sess["key"] != cfg["gemini_api_key"] or sess["model"] != model
                  or sess["turns"] >= MAX_TURNS)
         if stale:
+            history = None
             if sess is not None and sess["turns"] >= MAX_TURNS:
-                carried = _summarize(sess)
-            sess = _new_session(cfg, model)
+                carried = _summarize(sess)       # 길어진 대화는 요약만 넘김
+            else:
+                history = _saved_history(session_id)   # 재실행·키 변경 뒤에는 저장된 대화를 이어받음
+            sess = _new_session(cfg, model, history)
             _sessions[session_id] = sess
     with sess["lock"]:
         start_log(on_event)

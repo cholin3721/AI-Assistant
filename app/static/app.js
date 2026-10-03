@@ -80,6 +80,7 @@ async function refreshStatus() {
   $("#todo-count").textContent = state.todos.open;
   $("#forms-count").textContent = state.forms.drafts;
   $("#q-team").classList.toggle("hidden", !state.discord.read_channel);
+  $$("[data-need]").forEach((el) => el.classList.toggle("hidden", (el.dataset.need === "google") !== !!gs.connected));
   const tts = state.timetable;
   $("#tt-count").textContent = tts.classes ? tts.classes : "미등록";
   $("#tt-today").textContent = !tts.classes ? "" : tts.today.length ? "오늘 수업: " + tts.today.map((c) => `${c.start} ${c.title}`).join(" · ") : "오늘은 수업이 없어요";
@@ -105,6 +106,14 @@ function addMsg(role, html, tools) {
   $("#messages").appendChild(wrap);
   $("#messages").scrollTop = $("#messages").scrollHeight;
   return wrap;
+}
+function addConnectCard(botEl) {
+  const card = document.createElement("div"); card.className = "connect-card";
+  card.innerHTML = `<div><b>이 기능은 구글 연결이 필요해요.</b><br><span>메일·캘린더·드라이브를 맡기려면 한 번만 연결하면 돼요 (약 5분). 팀원에게 열쇠 파일을 받았다면 1분이면 끝나요.</span></div>
+    <button class="sm" type="button">구글 연결하기</button>`;
+  card.querySelector("button").addEventListener("click", () => openWizard(GOOGLE_PAGE));
+  botEl.querySelector(".bubble").appendChild(card);
+  $("#messages").scrollTop = $("#messages").scrollHeight;
 }
 async function send(text) {
   text = (text || "").trim();
@@ -170,6 +179,7 @@ async function send(text) {
     const tools = doneEv?.tools || [];
     const botEl = addMsg("bot", md(acc || "응답을 만들지 못했어요."), tools);
     addFeedback(botEl, tools);
+    if (!state.google.connected && tools.some((t) => !t.ok && /구글 계정이 연동되지/.test(t.error || ""))) addConnectCard(botEl);
     speak(acc);
     const used = (n) => tools.some((t) => t.name === n && t.ok);
     if (used("find_events_in_emails") || used("find_events_in_notices")) openSched(false);
@@ -186,7 +196,8 @@ $("#composer").addEventListener("submit", (e) => { e.preventDefault(); const v =
 $("#input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#composer").requestSubmit(); } });
 function autosize() { const t = $("#input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 180) + "px"; }
 $("#input").addEventListener("input", autosize);
-$$(".quick, .ex").forEach((b) => b.addEventListener("click", () => send(b.dataset.q)));
+$$(".quick[data-q], .ex[data-q]").forEach((b) => b.addEventListener("click", () => send(b.dataset.q)));
+$("#q-google").addEventListener("click", () => openWizard(GOOGLE_PAGE));
 $("#btn-new").addEventListener("click", async () => {
   await api("/api/chat/reset", { method: "POST", body: { session_id: sessionId } }).catch(() => {});
   sessionId = Math.random().toString(36).slice(2);
@@ -194,28 +205,44 @@ $("#btn-new").addEventListener("click", async () => {
   location.reload();
 });
 $("#conn-gemini").addEventListener("click", () => (state?.gemini.set ? openSettings("ai") : openWizard(2)));
-$("#conn-google").addEventListener("click", () => (state?.google.connected ? openSettings("google") : openWizard(3)));
+$("#conn-google").addEventListener("click", () => (state?.google.connected ? openSettings("google") : openWizard(GOOGLE_PAGE)));
 $("#conn-tg").addEventListener("click", () => openSettings("tg"));
 
 /* ---------- 설정 마법사 ---------- */
 let page = 0;
-const LAST = 4;
-function openWizard(p = 0) { $("#wizard").classList.remove("hidden"); $("#settings").classList.add("hidden"); showPage(p); }
+const LAST = 4, GOOGLE_PAGE = 3;
+const FLOW = [0, 1, 2, LAST];          // 첫 실행 순서 (구글 연결은 빠져 있음)
+let guideBack = null;                  // 구글 가이드를 닫으면 돌아갈 곳 (완료 화면에서 열었을 때)
+function openWizard(p = 0) {
+  guideBack = p === GOOGLE_PAGE && !$("#wizard").classList.contains("hidden") && page === LAST ? LAST : null;
+  $("#wizard").classList.remove("hidden"); $("#settings").classList.add("hidden"); showPage(p);
+}
 function closeWizard() { $("#wizard").classList.add("hidden"); }
+const DONE_EXAMPLES = {
+  base: ["“오늘의 브리핑 해줘”", "“장학금 공지 중에 지금 신청할 수 있는 거 알려줘”", "“AID 공모전 신청하려면 뭐 해야 돼? 체크리스트 만들어줘”", "“중간고사랑 수강신청 언제야?”"],
+  google: ["“오늘의 브리핑 해줘”", "“안 읽은 메일 중에 답장해야 하는 거 있어?”", "“장학금 공지 중에 지금 신청할 수 있는 거 알려줘”", "“금요일 오후 2시에 팀플 회의 일정 넣어줘”"],
+};
 function showPage(p) {
   page = p;
+  const guide = p === GOOGLE_PAGE;
   $$(".page").forEach((el) => el.classList.toggle("hidden", +el.dataset.page !== p));
-  $$("#steps li").forEach((li, i) => { li.className = i === p ? "active" : i < p ? "done" : ""; });
-  $("#wiz-prev").style.visibility = p === 0 ? "hidden" : "visible";
-  $("#wiz-skip").classList.toggle("hidden", !(p === 1 || p === 3));
-  $("#wiz-next").textContent = p === 0 ? "시작하기" : p === LAST ? "AI 비서 시작" : "다음";
+  const at = FLOW.indexOf(p);
+  $$("#steps li").forEach((li, i) => { li.className = i === at ? "active" : i < at ? "done" : ""; });
+  $("#steps").classList.toggle("hidden", guide);
+  $("#wiz-title").classList.toggle("hidden", !guide);
+  $("#wiz-prev").style.visibility = p === 0 || guide ? "hidden" : "visible";
+  $("#wiz-skip").classList.toggle("hidden", p !== 1);
+  $("#wiz-next").textContent = p === 0 ? "시작하기" : p === LAST ? "AI 비서 시작" : guide ? "닫기" : "다음";
   if (p === 2) updateKeyPage();
-  if (p === 3) updateGooglePage();
+  if (guide) updateGooglePage();
   if (p === LAST) {
-    const parts = ["Gemini 연결됨"];
-    parts.push(state.google.connected ? `구글 연동됨 (${state.google.email || "계정"})` : "구글 연동은 나중에 설정에서 할 수 있어요");
-    parts.push("학교 공지 사용 가능");
+    const on = state.google.connected;
+    const parts = ["AI 연결됨"];
+    if (on) parts.push(`구글 연동됨 (${state.google.email || "계정"})`);
+    parts.push("학교 공지·학사일정 사용 가능");
     $("#done-summary").textContent = parts.join(" · ");
+    $("#done-examples").innerHTML = (on ? DONE_EXAMPLES.google : DONE_EXAMPLES.base).map((t) => `<li>${t}</li>`).join("");
+    $("#done-google").classList.toggle("hidden", on);
   }
 }
 function updateKeyPage() {
@@ -228,9 +255,16 @@ async function saveProfile(prefix) {
 }
 function fillProfile(prefix) { ["name", "department", "grade", "interests"].forEach((k) => ($(`#${prefix}-${k}`).value = state.profile[k] || "")); }
 
-$("#wiz-prev").addEventListener("click", () => showPage(Math.max(0, page - 1)));
-$("#wiz-skip").addEventListener("click", () => showPage(page + 1));
+const flowStep = (d) => FLOW[Math.max(0, Math.min(FLOW.length - 1, FLOW.indexOf(page) + d))];
+$("#wiz-prev").addEventListener("click", () => showPage(flowStep(-1)));
+$("#wiz-skip").addEventListener("click", () => showPage(flowStep(1)));
+$("#wiz-google").addEventListener("click", () => openWizard(GOOGLE_PAGE));
 $("#wiz-next").addEventListener("click", async () => {
+  if (page === GOOGLE_PAGE) {            // 구글 가이드는 닫기만
+    await refreshStatus().catch(() => {});
+    if (guideBack !== null) showPage(guideBack); else closeWizard();
+    return;
+  }
   if (page === 1) await saveProfile("p").catch(() => {});
   if (page === 2 && !state.gemini.set) {
     if ($("#gemini-key").value.trim()) { await checkKey(); if (!state.gemini.set) return; }
@@ -241,7 +275,7 @@ $("#wiz-next").addEventListener("click", async () => {
     closeWizard(); $("#input").focus(); return;
   }
   await refreshStatus();
-  showPage(page + 1);
+  showPage(flowStep(1));
 });
 
 /* Gemini 키 */
@@ -282,7 +316,7 @@ function updateGooglePage() {
   if (state.google.connected) setResult(r, "ok", `연동 완료! ${state.google.email || ""}`);
   else if (state.google.error) setResult(r, "bad", state.google.error);
   else setResult(r, "", "");
-  $("#wiz-next").textContent = state.google.connected ? "다음" : "다음 (구글 없이 진행)";
+  $("#wiz-next").textContent = state.google.connected ? "완료" : "닫기";
 }
 $$("#g-steps > li").forEach((li, i) => {
   const cb = li.querySelector("input[type=checkbox]");
@@ -321,7 +355,7 @@ async function googleLogin(resultEl) {
     const s = await refreshStatus();
     if (!s.google.login_in_progress) break;
   }
-  if (!$("#wizard").classList.contains("hidden") && page === 3) updateGooglePage();
+  if (!$("#wizard").classList.contains("hidden") && page === GOOGLE_PAGE) updateGooglePage();
   if (!$("#settings").classList.contains("hidden")) fillSettings();
   if (state.google.connected) toast("구글 연동 완료!");
 }
@@ -360,8 +394,8 @@ $("#s-key-save").addEventListener("click", async () => {
   catch (e) { toast(e.message); }
 });
 $("#s-model").addEventListener("change", async (e) => { await api("/api/settings", { method: "POST", body: { model: e.target.value } }); toast(`모델 변경: ${e.target.value}`); refreshStatus(); });
-$("#s-google-login").addEventListener("click", () => (state.google.client_uploaded ? googleLogin(null) : openWizard(3)));
-$("#s-google-guide").addEventListener("click", () => openWizard(3));
+$("#s-google-login").addEventListener("click", () => (state.google.client_uploaded ? googleLogin(null) : openWizard(GOOGLE_PAGE)));
+$("#s-google-guide").addEventListener("click", () => openWizard(GOOGLE_PAGE));
 $("#s-google-off").addEventListener("click", async () => { await api("/api/google/disconnect", { method: "POST", body: { remove_client: false } }); toast("구글 연결을 해제했어요"); fillSettings(); });
 
 $("#s-auto-scan").addEventListener("change", async (e) => {
@@ -375,7 +409,7 @@ function updateSchedBadge() {
   const sc = state?.schedule; if (!sc) return;
   const badge = $("#sched-badge");
   badge.textContent = sc.pending; badge.classList.toggle("hidden", !sc.pending);
-  let meta = sc.running ? "메일·공지 확인 중…" : !state.google.connected ? "메일 일정은 구글 연동 후 사용할 수 있어요" :
+  let meta = sc.running ? "메일·공지 확인 중…" : !state.google.connected ? "학교 공지에서 일정을 찾아요 · 메일은 구글 연결 후" :
     sc.enabled ? "새 메일·공지에서 일정을 자동으로 찾아요" : "자동 찾기 꺼짐 · 눌러서 확인";
   $("#sched-meta").textContent = meta;
   if (lastPending !== null && sc.pending > lastPending) toast(`메일에서 새 일정 후보 ${sc.pending - lastPending}개를 찾았어요`);
@@ -416,7 +450,8 @@ function cardHTML(c) {
     <label class="check full"><input type="checkbox" data-f="allday" ${allDay ? "checked" : ""}> 하루 종일 (마감일 등)</label>
   </div>
   <div class="actions">
-    <button class="sm" data-a="add">캘린더에 추가</button>
+    <button class="${state.google.connected ? "sm" : "ghost sm"}" data-a="add">캘린더에 추가</button>
+    <button class="${state.google.connected ? "ghost sm" : "sm"}" data-a="todo">할 일에 저장</button>
     <button class="ghost sm" data-a="edit">수정</button>
     <button class="ghost sm" data-a="ignore">무시</button>
   </div>`;
@@ -424,7 +459,7 @@ function cardHTML(c) {
 function renderCandidates(list) {
   const box = $("#sched-list"); box.innerHTML = "";
   if (!list.length) {
-    box.innerHTML = `<div class="empty-list">${state.google.connected ? "확인할 일정 후보가 없어요.<br>「새 메일 확인」을 눌러보세요." : "구글 연동을 먼저 해주세요."}</div>`;
+    box.innerHTML = `<div class="empty-list">확인할 일정 후보가 없어요.<br>${state.google.connected ? "「새 메일 확인」이나 「학교 공지 확인」을 눌러보세요." : "「학교 공지 확인」을 눌러보세요. 메일에서 찾으려면 구글 연결이 필요해요."}</div>`;
     return;
   }
   list.forEach((c) => {
@@ -445,10 +480,26 @@ function renderCandidates(list) {
       el.classList.add("fade"); setTimeout(() => { el.remove(); if (!$("#sched-list .card")) renderCandidates([]); }, 400);
       refreshStatus();
     });
-    el.querySelector('[data-a="add"]').addEventListener("click", async (e) => {
-      const btn = e.target; btn.disabled = true; btn.textContent = "추가하는 중…";
+    const edits = () => {
       const body = {};
       if (!edit.classList.contains("hidden")) ["title", "start", "end", "location"].forEach((f) => (body[f] = edit.querySelector(`[data-f="${f}"]`).value));
+      return body;
+    };
+    el.querySelector('[data-a="todo"]').addEventListener("click", async (e) => {
+      const btn = e.target; btn.disabled = true; btn.textContent = "저장하는 중…";
+      try {
+        const r = await api(`/api/schedule/${c.id}/todo`, { method: "POST", body: edits() });
+        el.classList.add("done");
+        el.innerHTML = `<div class="card-top"><b>${esc(r.title)}</b><span class="conf high">할 일에 저장됨</span></div>
+          <div class="when">${esc(fmtWhen(r))} · 마감 D-3, D-1, 당일에 알려드려요</div>`;
+        toast("할 일에 저장했어요");
+        refreshStatus();
+      } catch (err) { btn.disabled = false; btn.textContent = "할 일에 저장"; toast(err.message); }
+    });
+    el.querySelector('[data-a="add"]').addEventListener("click", async (e) => {
+      if (!state.google.connected) { toast("캘린더에 넣으려면 구글 연결이 필요해요. 「할 일에 저장」은 바로 돼요."); return; }
+      const btn = e.target; btn.disabled = true; btn.textContent = "추가하는 중…";
+      const body = edits();
       try {
         const r = await api(`/api/schedule/${c.id}/add`, { method: "POST", body });
         el.classList.add("done");
@@ -480,6 +531,10 @@ async function scanMail(force = false) {
 async function openSched(autoScan = true) {
   $("#sched").classList.remove("hidden");
   setResult($("#sched-result"), "", "");
+  const on = state.google.connected;      // 구글이 없으면 '학교 공지 확인'이 기본 버튼
+  $("#sched-scan").classList.toggle("hidden", !on);
+  $("#sched-force").parentElement.classList.toggle("hidden", !on);
+  $("#sched-scan-notice").className = on ? "ghost sm" : "sm";
   const list = await loadCandidates().catch(() => []);
   if (autoScan && !list.length && state.google.connected && state.gemini.set) scanMail();
 }
@@ -1164,7 +1219,7 @@ async function loadStats() {
   $("#st-kpi").innerHTML =
     kpiTile(k.chats, "비서와 대화", Object.entries(k.chats_by_channel).map(([c, n]) => `${({ web: "화면", discord: "디스코드", telegram: "텔레그램", task: "자동" })[c] || c} ${n}`).join(" · ")) +
     kpiTile(k.reminders + k.briefings, "먼저 챙겨준 알림", `마감 알림 ${k.reminders} · 브리핑·회고 ${k.briefings}`) +
-    kpiTile(k.candidates_found, "찾아준 일정 후보", `캘린더 추가 ${k.candidates_added}`) +
+    kpiTile(k.candidates_found, "찾아준 일정 후보", `캘린더 ${k.candidates_added} · 할 일 ${k.candidates_todo || 0}`) +
     kpiTile(k.email_drafts + k.form_drafts, "써준 초안", `메일 ${k.email_drafts} · 신청서 ${k.form_drafts}`) +
     kpiTile(sat, "답변 만족도", k.feedback_total ? `평가 ${k.feedback_total}회 중 좋아요 ${k.feedback_up}` : "답변 아래 버튼으로 평가해요") +
     kpiTile(fmtMinutes(k.minutes_saved), "아낀 시간 (추정)", "계산 기준은 아래에");
