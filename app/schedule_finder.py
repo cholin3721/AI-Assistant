@@ -5,7 +5,6 @@
   - 상대 날짜("다음 주 화요일") 오인식 등 AI 실수를 사람이 한 번 걸러내도록
 """
 import hashlib
-import json
 import re
 import threading
 import time
@@ -16,13 +15,14 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from . import config, google_auth
+from . import config, google_auth, store
 
 KST = timezone(timedelta(hours=9))
-STORE_PATH = config.DATA_DIR / "schedule.json"
+DEFAULT = {"processed": {}, "candidates": {}, "processed_notices": {}}
 BATCH = 8                 # Gemini 한 번에 넘길 메일 수
+KEEP_PROCESSED = 1000     # 확인한 메일·공지 기록은 최근 것만
+KEEP_PAST_DAYS = 60       # 날짜가 이만큼 지난 후보는 정리
 
-_lock = threading.Lock()       # 저장소 접근
 _mail_lock = threading.Lock()  # 메일 스캔 (공지 스캔과 동시에 가능)
 _notice_lock = threading.Lock()
 
@@ -65,23 +65,52 @@ EXTRACT_PROMPT = """너는 메일에서 '사용자가 캘린더에 넣어야 할
 
 
 # ---------- 저장소 ----------
+# 스캔은 수십 초 걸리므로 '읽어 둔 사본'을 통째로 다시 쓰면, 그 사이 사용자가 누른 「무시/추가」나
+# 동시에 돌던 다른 스캔의 결과를 덮어쓰게 됩니다. 그래서 저장할 때는 항상 최신 파일을 다시 읽어 바뀐 부분만 합칩니다.
 def _load() -> dict:
-    with _lock:
-        if STORE_PATH.exists():
-            try:
-                return json.loads(STORE_PATH.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                pass
-    return {"processed": {}, "candidates": {}}
+    data = store.load("schedule", DEFAULT)
+    for k, v in DEFAULT.items():
+        if not isinstance(data.get(k), dict):
+            data[k] = dict(v)
+    return data
 
 
-def _save(data: dict):
-    # 처리한 메일 기록은 최근 1000개만 유지
-    proc = data.get("processed", {})
-    if len(proc) > 1000:
-        data["processed"] = dict(sorted(proc.items(), key=lambda kv: kv[1])[-1000:])
-    with _lock:
-        STORE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+def _trim(d: dict):
+    for key in ("processed", "processed_notices"):
+        proc = d.get(key) or {}
+        if len(proc) > KEEP_PROCESSED:
+            d[key] = dict(sorted(proc.items(), key=lambda kv: kv[1])[-KEEP_PROCESSED:])
+    cutoff = (datetime.now(KST) - timedelta(days=KEEP_PAST_DAYS)).strftime("%Y-%m-%d")
+    d["candidates"] = {k: c for k, c in (d.get("candidates") or {}).items()
+                       if str(c.get("start", ""))[:10] >= cutoff}
+
+
+def _commit(created: dict, processed: dict | None = None, processed_notices: dict | None = None):
+    """스캔 결과를 최신 저장소에 합침: 새 후보는 없을 때만 추가(사용자가 이미 처리한 것은 그대로)."""
+    def fn(d):
+        for k, v in DEFAULT.items():
+            if not isinstance(d.get(k), dict):
+                d[k] = dict(v)
+        for cid, c in created.items():
+            d["candidates"].setdefault(cid, c)
+        d["processed"].update(processed or {})
+        d["processed_notices"].update(processed_notices or {})
+        _trim(d)
+    store.update("schedule", DEFAULT, fn)
+
+
+def _change(cid: str, changes: dict) -> dict:
+    """후보 하나의 값만 바꿔 저장 (다른 후보·스캔 기록은 건드리지 않음)."""
+    def fn(d):
+        c = (d.get("candidates") or {}).get(cid)
+        if c is None:
+            return None
+        c.update(changes)
+        return c
+    c = store.update("schedule", DEFAULT, fn)
+    if c is None:
+        raise ScanError("후보를 찾을 수 없어요. 새로고침 해주세요.")
+    return c
 
 
 def list_candidates(status: str = "pending") -> list:
@@ -152,9 +181,12 @@ def _read_bodies(ids: list) -> dict:
 
 
 def _existing_events() -> list:
-    from .tools.gcalendar import list_calendar_events
-    res = list_calendar_events(days_ahead=180, days_back=1)
-    return res.get("events", []) if "error" not in res else []
+    """중복 판정용 내 캘린더 일정 (앞으로 180일). 구글 미연동·오류면 빈 목록."""
+    try:
+        from .tools.gcalendar import fetch_events
+        return fetch_events(days_ahead=180, days_back=1, limit=1000)["events"]
+    except Exception:
+        return []
 
 
 def _extract(emails: list) -> list:
@@ -267,11 +299,11 @@ def scan(days: int = 7, force: bool = False, limit: int = 25) -> dict:
         meta = {e["id"]: {"key": e["id"], "source": "mail", "from": e["from"], "subject": e["subject"],
                           "link": f"https://mail.google.com/mail/u/0/#all/{e['id']}", "link_text": "메일 보기"}
                 for e in emails}
+        known = set(data["candidates"])
         new = _make_candidates(_run_extract(emails), meta, data)
         stamp = time.time()
-        for e in emails:
-            data["processed"][e["id"]] = stamp
-        _save(data)
+        _commit({k: c for k, c in data["candidates"].items() if k not in known},
+                processed={e["id"]: stamp for e in emails})
         msg = f"메일 {len(emails)}통에서 새 일정 후보 {len(new)}개를 찾았어요." if new else \
             f"메일 {len(emails)}통을 확인했지만 새 일정은 없었어요."
         return {"checked": len(emails), "found": len(new), "new": new, "message": msg}
@@ -351,7 +383,8 @@ def scan_notices(days: int = 7, force: bool = False) -> dict:
         raise ScanError("이미 공지를 확인하는 중이에요. 잠시만 기다려주세요.")
     try:
         data = _load()
-        done = data.setdefault("processed_notices", {})
+        done = data["processed_notices"]
+        known = set(data["candidates"])
         notices = [n for n in _fetch_notices(days) if force or n["url"] not in done]
         if not notices:
             return {"checked": 0, "found": 0, "new": [], "message": "새로 올라온 공지가 없어요."}
@@ -369,11 +402,8 @@ def scan_notices(days: int = 7, force: bool = False) -> dict:
                          "subject": n["title"], "link": n["url"], "link_text": "공지 보기"}
         new = _make_candidates(_run_extract(docs), meta, data) if docs else []
         stamp = time.time()
-        for n in notices:
-            done[n["url"]] = stamp
-        if len(done) > 1000:
-            data["processed_notices"] = dict(sorted(done.items(), key=lambda kv: kv[1])[-1000:])
-        _save(data)
+        _commit({k: c for k, c in data["candidates"].items() if k not in known},
+                processed_notices={n["url"]: stamp for n in notices})
         msg = (f"새 공지 {len(notices)}개 중 {len(picked)}개를 읽고 일정 후보 {len(new)}개를 찾았어요."
                if new else f"새 공지 {len(notices)}개를 확인했지만 챙길 일정은 없었어요.")
         return {"checked": len(notices), "read": len(picked), "found": len(new), "new": new, "message": msg}
@@ -382,17 +412,25 @@ def scan_notices(days: int = 7, force: bool = False) -> dict:
 
 
 # ---------- 사용자 결정 ----------
-def add_to_calendar(cid: str, edits: dict | None = None) -> dict:
-    from .tools.gcalendar import create_calendar_event
-    data = _load()
-    c = data["candidates"].get(cid)
+def _edited(cid: str, edits: dict | None) -> dict:
+    """저장된 후보에 화면에서 고친 값을 입힌 사본 (아직 저장하지 않음)."""
+    c = _load()["candidates"].get(cid)
     if c is None:
         raise ScanError("후보를 찾을 수 없어요. 새로고침 해주세요.")
-    if c["status"] == "added":
-        return c
+    c = dict(c)
     for k in ("title", "start", "end", "location"):
         if edits and edits.get(k) is not None:
-            c[k] = str(edits[k]).strip()
+            c[k] = str(edits[k]).strip()[:200]
+    if not c["title"]:
+        raise ScanError("제목이 비어 있어요.")
+    return c
+
+
+def add_to_calendar(cid: str, edits: dict | None = None) -> dict:
+    from .tools.gcalendar import create_calendar_event
+    c = _edited(cid, edits)
+    if c["status"] == "added":
+        return c
     s, e = _parse_dt(c["start"]), _parse_dt(c["end"])
     if s is None:
         raise ScanError("시작 날짜 형식이 올바르지 않아요.")
@@ -407,8 +445,8 @@ def add_to_calendar(cid: str, edits: dict | None = None) -> dict:
                                 description=desc, location=c.get("location", ""))
     if "error" in res:
         raise ScanError(res["error"])
-    c["status"], c["calendar_link"] = "added", res.get("link", "")
-    _save(data)
+    c = _change(cid, {**{k: c[k] for k in ("title", "start", "end", "location", "all_day")},
+                      "status": "added", "calendar_link": res.get("link", "")})
     from . import stats
     stats.record("candidate_added")
     return c
@@ -418,15 +456,9 @@ def add_to_todo(cid: str, edits: dict | None = None) -> dict:
     """일정 후보를 '내 할 일'로 저장합니다. 구글 연동 없이도 마감을 챙길 수 있게 하는 길입니다."""
     from . import todos
     from .tools import ToolError
-    data = _load()
-    c = data["candidates"].get(cid)
-    if c is None:
-        raise ScanError("후보를 찾을 수 없어요. 새로고침 해주세요.")
+    c = _edited(cid, edits)
     if c["status"] in ("added", "todo"):
         return c
-    for k in ("title", "start", "end", "location"):
-        if edits and edits.get(k) is not None:
-            c[k] = str(edits[k]).strip()
     s = _parse_dt(c["start"])
     if s is None:
         raise ScanError("시작 날짜 형식이 올바르지 않아요.")
@@ -439,20 +471,15 @@ def add_to_todo(cid: str, edits: dict | None = None) -> dict:
         item = todos.add(c["title"], due=s.strftime("%Y-%m-%d"), note=note, link=c.get("mail_link", ""))
     except ToolError as e:
         raise ScanError(str(e))
-    c["status"], c["todo_id"] = "todo", item["id"]
-    _save(data)
+    c = _change(cid, {**{k: c[k] for k in ("title", "start", "end", "location", "all_day")},
+                      "status": "todo", "todo_id": item["id"]})
     from . import stats
     stats.record("candidate_todo")
     return c
 
 
 def ignore(cid: str) -> dict:
-    data = _load()
-    c = data["candidates"].get(cid)
-    if c is None:
-        raise ScanError("후보를 찾을 수 없어요.")
-    c["status"] = "ignored"
-    _save(data)
+    c = _change(cid, {"status": "ignored"})
     from . import stats
     stats.record("candidate_ignored")
     return c

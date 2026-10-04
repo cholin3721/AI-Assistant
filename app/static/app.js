@@ -27,6 +27,12 @@ function store(key, val) {
   catch (_) { return null; }
 }
 function setResult(el, cls, text) { el.className = "result " + cls; el.textContent = text; }
+async function downloadFile(path, name) {   // 서버가 만든 파일(.ics 등) 저장. 실패하면 안내 문구를 던짐
+  const res = await fetch(path);
+  if (!res.ok) { let d = {}; try { d = await res.json(); } catch (_) {} throw new Error(d.detail || `요청 실패 (${res.status})`); }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(await res.blob()); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
 
 /* ---------- 마크다운(간단) ---------- */
 function esc(s) { return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -34,6 +40,7 @@ function inline(s) {
   s = esc(s);
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  s = s.replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,!?])/g, "$1<i>$2</i>");
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   return s;
@@ -69,7 +76,7 @@ async function refreshStatus() {
   g.querySelector("small").textContent = state.gemini.set ? `연결됨 · ${state.gemini.model}` : "키 입력 필요 (눌러서 설정)";
   const gs = state.google;
   go.className = "conn " + (gs.connected ? "on" : "off");
-  go.querySelector("small").textContent = gs.connected ? (gs.email || "연결됨") : gs.error ? "다시 로그인 필요" : "미연동 (눌러서 연결)";
+  go.querySelector("small").textContent = gs.connected ? (gs.email || "연결됨") : gs.offline ? "인터넷 연결 확인 중 · 자동으로 다시 이어져요" : gs.error ? "다시 로그인 필요" : "미연동 (눌러서 연결)";
   const tg = state.telegram, dc = state.discord, ct = $("#conn-tg");
   const linked = [dc.linked && "디스코드", tg.linked && "텔레그램"].filter(Boolean);
   const pending = (dc.token_set && !dc.linked) || (tg.token_set && !tg.linked);
@@ -83,7 +90,8 @@ async function refreshStatus() {
   $$("[data-need]").forEach((el) => el.classList.toggle("hidden", (el.dataset.need === "google") !== !!gs.connected));
   const tts = state.timetable;
   $("#tt-count").textContent = tts.classes ? tts.classes : "미등록";
-  $("#tt-today").textContent = !tts.classes ? "" : tts.today.length ? "오늘 수업: " + tts.today.map((c) => `${c.start} ${c.title}`).join(" · ") : "오늘은 수업이 없어요";
+  $("#tt-today").textContent = !tts.classes ? "" : tts.holiday ? `오늘은 ${tts.holiday} · 수업이 없어요`
+    : (tts.today.length ? "오늘 수업: " + tts.today.map((c) => `${c.start} ${c.title}`).join(" · ") : "오늘은 수업이 없어요") + (tts.exam ? ` · ${tts.exam} 기간` : "");
   return state;
 }
 
@@ -115,11 +123,21 @@ function addConnectCard(botEl) {
   botEl.querySelector(".bubble").appendChild(card);
   $("#messages").scrollTop = $("#messages").scrollHeight;
 }
+let stopping = false, abortCtl = null;
+function setSendMode(answering) {   // 답을 만드는 동안 「보내기」 자리가 「중지」가 됨
+  const b = $("#send"); b.textContent = answering ? "중지" : "보내기"; b.classList.toggle("stop", answering); b.disabled = false;
+}
+function stopAnswer() {
+  if (!busy || stopping) return;
+  stopping = true; $("#send").textContent = "중지하는 중…"; $("#send").disabled = true;
+  api("/api/chat/stop", { method: "POST", body: { session_id: sessionId } }).catch(() => {});
+  setTimeout(() => { if (busy && stopping) abortCtl?.abort(); }, 8000);   // 오래 걸리는 작업 중이면 화면에서라도 끊음
+}
 async function send(text) {
   text = (text || "").trim();
   if (!text || busy) return;
   if (!state?.gemini.set) { openWizard(2); return; }
-  busy = true; $("#send").disabled = true;
+  busy = true; stopping = false; abortCtl = new AbortController(); setSendMode(true);
   addMsg("user", text);
   const typing = addMsg("bot", '<div class="typing"><span></span><span></span><span></span></div><ul class="progress"></ul>');
   const progressUl = typing.querySelector(".progress");
@@ -132,7 +150,7 @@ async function send(text) {
   try {
     const res = await fetch("/api/chat/stream", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, message: text }),
+      body: JSON.stringify({ session_id: sessionId, message: text }), signal: abortCtl.signal,
     });
     let data = {};
     if (!res.ok) {
@@ -186,13 +204,19 @@ async function send(text) {
     if (used("draft_application")) openForms(true);
   } catch (e) {
     typing.remove();
-    addMsg("error", esc(e.message));
+    if (e.name === "AbortError") addMsg("bot", md((acc ? acc + "\n\n" : "") + "_(여기서 중지했어요)_"));
+    else addMsg("error", esc(e.message));
   } finally {
-    busy = false; $("#send").disabled = false; $("#input").focus();
+    busy = false; stopping = false; setSendMode(false); $("#input").focus();
     refreshStatus().catch(() => {});
   }
 }
-$("#composer").addEventListener("submit", (e) => { e.preventDefault(); const v = $("#input").value; $("#input").value = ""; autosize(); send(v); });
+$("#composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (busy) return;   // 답을 기다리는 동안 Enter를 눌러도 써 둔 글이 사라지지 않게
+  const v = $("#input").value; $("#input").value = ""; autosize(); send(v);
+});
+$("#send").addEventListener("click", (e) => { if (busy) { e.preventDefault(); stopAnswer(); } });
 $("#input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#composer").requestSubmit(); } });
 function autosize() { const t = $("#input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 180) + "px"; }
 $("#input").addEventListener("input", autosize);
@@ -412,7 +436,7 @@ function updateSchedBadge() {
   let meta = sc.running ? "메일·공지 확인 중…" : !state.google.connected ? "학교 공지에서 일정을 찾아요 · 메일은 구글 연결 후" :
     sc.enabled ? "새 메일·공지에서 일정을 자동으로 찾아요" : "자동 찾기 꺼짐 · 눌러서 확인";
   $("#sched-meta").textContent = meta;
-  if (lastPending !== null && sc.pending > lastPending) toast(`메일에서 새 일정 후보 ${sc.pending - lastPending}개를 찾았어요`);
+  if (lastPending !== null && sc.pending > lastPending) toast(`새 일정 후보 ${sc.pending - lastPending}개를 찾았어요`);
   lastPending = sc.pending;
 }
 const WD = "일월화수목금토";
@@ -569,7 +593,7 @@ function updateBell() {
   }
   lastUnread = n;
 }
-const KIND = { briefing: "브리핑", weekly: "주간 회고", reminder: "마감", schedule: "일정 후보", notice: "관심 공지", system: "안내" };
+const KIND = { briefing: "브리핑", weekly: "주간 회고", reminder: "마감", overdue: "지난 마감", schedule: "일정 후보", notice: "관심 공지", system: "안내" };
 function timeAgo(ts) {
   const d = (Date.now() / 1000 - ts) | 0;
   if (d < 60) return "방금"; if (d < 3600) return `${(d / 60) | 0}분 전`; if (d < 86400) return `${(d / 3600) | 0}시간 전`;
@@ -624,6 +648,10 @@ $("#todo-close").addEventListener("click", () => $("#todo").classList.add("hidde
 $("#todo-add").addEventListener("click", addTodo);
 $("#todo-title").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) addTodo(); });
 $("#todo-show-done").addEventListener("change", loadTodos);
+$("#todo-ics").addEventListener("click", async () => {
+  try { await downloadFile("/api/todos/ics", "할 일 마감.ics"); toast("저장했어요. 캘린더 앱의 「가져오기」로 열어주세요"); }
+  catch (e) { toast(e.message); }
+});
 
 /* ---------- 기억 ---------- */
 async function loadMemory() {
@@ -712,6 +740,7 @@ function fillDiscord() {
       if ($("#settings").classList.contains("hidden")) return clearInterval(dcPoll);
       await refreshStatus();
       $("#dc-online").textContent = state.discord.online ? "(봇 접속됨)" : "(봇 접속 중…)";
+      if (state.discord.link_code) $("#dc-code").textContent = state.discord.link_code;   // 여러 번 틀리면 코드가 새로 바뀜
       if (state.discord.error) setResult($("#dc-result"), "bad", state.discord.error);
       if (state.discord.linked) { clearInterval(dcPoll); fillDiscord(); toast("디스코드 연결 완료!"); }
     }, 3000);
@@ -780,6 +809,7 @@ function fillTelegram() {
     tgPoll = setInterval(async () => {
       if ($("#settings").classList.contains("hidden")) return clearInterval(tgPoll);
       await refreshStatus();
+      if (state.telegram.link_url) $("#tg-link-btn").href = state.telegram.link_url;
       if (state.telegram.linked) { clearInterval(tgPoll); fillTelegram(); toast("텔레그램 연결 완료!"); }
     }, 3000);
   }
@@ -845,6 +875,7 @@ function renderTT() {
     <div class="ttg-times" style="height:${H}px">${times}</div>${cols}</div>`;
   $("#tt-empty").classList.toggle("hidden", rows.length > 0);
   $("#tt-clear").classList.toggle("hidden", !TT.rows.length || !!TT.preview);
+  $("#tt-ics").classList.toggle("hidden", !TT.rows.length || !!TT.preview);
   $("#tt-preview").classList.toggle("hidden", !TT.preview);
   $$("#tt-grid .ttg-col").forEach((col) => col.addEventListener("click", (e) => {
     if (TT.preview) return;
@@ -875,6 +906,10 @@ async function openTT() {
   renderTT();
 }
 $("#btn-tt").addEventListener("click", () => openTT().catch((e) => toast(e.message)));
+$("#tt-ics").addEventListener("click", async () => {
+  try { await downloadFile("/api/timetable/ics", "수업 시간표.ics"); setResult($("#tt-result"), "ok", "저장했어요. 폰·구글 캘린더의 「가져오기」로 열면 종강일까지 매주 반복 일정으로 들어가요 (휴일 제외)."); }
+  catch (e) { toast(e.message); }
+});
 $("#tt-close").addEventListener("click", () => $("#tt").classList.add("hidden"));
 $("#wiz-tt").addEventListener("click", async () => {
   await api("/api/settings", { method: "POST", body: { setup_done: true } }).catch(() => {});

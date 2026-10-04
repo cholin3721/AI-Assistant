@@ -2,6 +2,7 @@
 진행 상황을 실시간(SSE)으로 흘려보낼 수 있게 콜백을 둡니다."""
 import contextvars
 import functools
+import logging
 import threading
 import time
 
@@ -19,12 +20,25 @@ _ARG_HINTS = {
 }
 
 
-def start_log(on_event=None):
-    """한 번의 대화 처리 시작. on_event(dict)를 주면 도구 호출 시작·끝마다 호출됩니다."""
+def start_log(on_event=None, count_stats: bool = True, should_stop=None):
+    """한 번의 대화 처리 시작. on_event(dict)를 주면 도구 호출 시작·끝마다 호출됩니다.
+
+    count_stats: 이 대화에서 쓴 도구를 사용 리포트(아낀 시간)에 셀지. 자동 브리핑처럼 따로 세는 작업은 False.
+    should_stop: 사용자가 「중지」를 눌렀는지 알려주는 함수. True면 남은 도구 호출을 건너뜁니다.
+    """
     log = []
     _call_log.set(log)
     _progress.set(on_event)
     _tls.log, _tls.on_event = log, on_event
+    _tls.count_stats, _tls.should_stop, _tls.depth = count_stats, should_stop, 0
+
+
+def end_log():
+    """대화 처리 끝. 같은 스레드가 다른 요청에 다시 쓰여도 이전 대화의 기록·콜백이 남지 않게 비웁니다."""
+    _call_log.set(None)
+    _progress.set(None)
+    _tls.log = _tls.on_event = _tls.should_stop = None
+    _tls.count_stats, _tls.depth = False, 0
 
 
 def get_log():
@@ -39,6 +53,14 @@ def emit(event: dict):
             cb(event)
         except Exception:
             pass
+
+
+def stop_requested() -> bool:
+    fn = getattr(_tls, "should_stop", None)
+    try:
+        return bool(fn and fn())
+    except Exception:
+        return False
 
 
 def describe(name: str, kwargs: dict) -> str:
@@ -65,9 +87,14 @@ def tool(label: str):
             entry = {"name": fn.__name__, "label": label, "args": kwargs, "ok": True}
             if log is not None:
                 log.append(entry)
+            if stop_requested():   # 사용자가 「중지」를 누름 → 실제 호출 없이 바로 끝냄
+                entry["ok"], entry["error"] = False, "사용자가 중지했어요."
+                return {"error": "사용자가 중지했어요. 더 진행하지 말고 여기서 멈추세요."}
             text = describe(fn.__name__, kwargs)
             emit({"type": "tool_start", "name": fn.__name__, "label": label, "text": text})
             t0 = time.time()
+            depth = getattr(_tls, "depth", 0)
+            _tls.depth = depth + 1
             try:
                 return fn(*args, **kwargs)
             except ToolError as e:
@@ -77,11 +104,15 @@ def tool(label: str):
             except Exception as e:  # 네트워크·권한 오류 등
                 entry["ok"] = False
                 entry["error"] = f"{type(e).__name__}: {e}"
+                logging.getLogger("inha").warning("도구 오류 %s: %s", fn.__name__, entry["error"][:300])
                 return {"error": entry["error"]}
             finally:
+                _tls.depth = depth
                 emit({"type": "tool_end", "name": fn.__name__, "label": label, "text": text,
                       "ok": entry["ok"], "error": entry.get("error", ""), "ms": int((time.time() - t0) * 1000)})
-                if entry["ok"]:
+                # 리포트에는 '사용자와의 대화에서 AI가 직접 고른 도구'만 셉니다.
+                # (30분마다 도는 자동 확인이나, 도구 안에서 다시 부른 도구까지 세면 아낀 시간이 부풀려짐)
+                if entry["ok"] and depth == 0 and getattr(_tls, "count_stats", False):
                     from .. import stats
                     stats.record(f"tool:{fn.__name__}")
         return wrapper

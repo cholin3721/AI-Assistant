@@ -103,29 +103,49 @@ def extract_from_image(data: bytes, mime: str) -> list:
     return normalize([c.model_dump() for c in parsed.classes])
 
 
+def _day_info(day) -> dict:
+    """학사일정으로 본 그 날의 휴일·시험기간 (학사일정을 아직 모르면 빈 값)."""
+    try:
+        from .tools.academic import day_info
+        return day_info(day)
+    except Exception:
+        return {"holiday": "", "exam": ""}
+
+
 def today_block() -> str:
-    """시스템 프롬프트용: 오늘·내일 수업."""
+    """시스템 프롬프트용: 오늘·내일 수업. 휴일이면 '수업 없음', 시험기간이면 표시."""
     now = datetime.now(KST)
     rows = get()
     if not rows:
         return "- (시간표 미등록)"
     lines = []
     for offset, label in ((0, "오늘"), (1, "내일")):
-        d = (now + timedelta(days=offset)).weekday()
+        date = (now + timedelta(days=offset)).date()
+        d = date.weekday()
+        info = _day_info(date)
+        if info["holiday"]:
+            lines.append(f"- {label}({DAYS[d]}): {info['holiday']} — 휴일이라 수업 없음")
+            continue
         cs = [f"{c['start']}~{c['end']} {c['title']}"
               + (f"({', '.join(x for x in (c.get('prof') and c['prof'] + ' 교수', c['place']) if x)})"
                  if c["place"] or c.get("prof") else "") for c in rows if c["day"] == d]
-        lines.append(f"- {label}({DAYS[d]}): " + (", ".join(cs) if cs else "수업 없음"))
+        line = f"- {label}({DAYS[d]}): " + (", ".join(cs) if cs else "수업 없음")
+        if info["exam"]:
+            line += f" · {info['exam']} 기간 (수업 대신 시험을 볼 수 있으니 시험 시간표 확인)"
+        lines.append(line)
     return "\n".join(lines)
 
 
 def summary() -> dict:
-    """화면 사이드바용: 등록된 수업 수와 오늘 수업."""
+    """화면 사이드바용: 등록된 수업 수와 오늘 수업 (휴일이면 수업 없음)."""
     rows = get()
-    d = datetime.now(KST).weekday()
-    today = [{"start": c["start"], "end": c["end"], "title": c["title"], "place": c["place"], "prof": c.get("prof", "")}
-             for c in rows if c["day"] == d]
-    return {"classes": len(rows), "today": today}
+    now = datetime.now(KST)
+    d = now.weekday()
+    info = _day_info(now.date())
+    today = [] if info["holiday"] else [
+        {"start": c["start"], "end": c["end"], "title": c["title"], "place": c["place"], "prof": c.get("prof", "")}
+        for c in rows if c["day"] == d]
+    return {"classes": len(rows), "today": today, "holiday": info["holiday"], "exam": info["exam"]}
 
 
 # ---------- 빈 시간 계산 ----------
@@ -173,7 +193,9 @@ def _busy_from_calendar(start: datetime, end: datetime) -> tuple:
 
 def free_slots(days_ahead: int, duration_minutes: int, earliest: str, latest: str,
                include_weekends: bool, busy_calendar: list, classes: list, now: datetime,
-               extra_busy: list | None = None) -> list:
+               extra_busy: list | None = None, no_class_days=None) -> list:
+    """no_class_days: 휴일처럼 수업이 없는 날짜(date)들 — 그날은 시간표 수업을 바쁜 시간으로 치지 않음."""
+    skip_class = set(no_class_days or ())
     dur = timedelta(minutes=max(15, int(duration_minutes)))
     eh, em = map(int, _hhmm(earliest).split(":"))
     lh, lm = map(int, _hhmm(latest).split(":"))
@@ -192,7 +214,7 @@ def free_slots(days_ahead: int, duration_minutes: int, earliest: str, latest: st
         busy = [(s, e) for s, e, *_ in busy_calendar if s < w1 and e > w0]
         busy += [(s, e) for s, e in extra if s < w1 and e > w0]
         for c in classes:
-            if c["day"] == day.weekday():
+            if c["day"] == day.weekday() and day.date() not in skip_class:
                 sh, sm = map(int, c["start"].split(":"))
                 fh, fm = map(int, c["end"].split(":"))
                 busy.append((day.replace(hour=sh, minute=sm), day.replace(hour=fh, minute=fm)))
@@ -231,8 +253,13 @@ def find_free_time(days_ahead: int = 7, duration_minutes: int = 60, earliest: st
         extra = [(s, e) for s, e, _ in busy_ranges(now, end)]
     except Exception:
         extra = []
+    try:
+        from .tools.academic import no_class_days
+        holidays = no_class_days(now.date(), end.date())
+    except Exception:
+        holidays = {}
     slots = free_slots(days_ahead, duration_minutes, earliest, latest, include_weekends,
-                       busy, get(), now, extra_busy=extra)
+                       busy, get(), now, extra_busy=extra, no_class_days=holidays)
     fmt = lambda s, e: f"{s.month}/{s.day}({DAYS[s.weekday()]}) {s:%H:%M}~{e:%H:%M} ({int((e - s).total_seconds() // 60)}분)"
     notes = []
     if not get():
@@ -243,9 +270,12 @@ def find_free_time(days_ahead: int = 7, duration_minutes: int = 60, earliest: st
         notes.append("구글 캘린더가 연결되지 않아 수업·학사일정만 보고 찾았어요.")
     if all_day:
         notes.append("종일 일정은 시간을 막지 않는 것으로 봤어요: " + ", ".join(all_day[:8]))
+    if holidays and get():
+        notes.append("휴일은 수업이 없는 날로 계산했어요: "
+                     + ", ".join(f"{d.month}/{d.day}({DAYS[d.weekday()]}) {t}" for d, t in sorted(holidays.items())[:6]))
     return {
         "used": {"calendar": connected and not cal_error, "calendar_events": len(busy),
-                 "timetable_classes": len(get()), "academic_busy": len(extra)},
+                 "timetable_classes": len(get()), "academic_busy": len(extra), "holidays": len(holidays)},
         "free_slots": [fmt(s, e) for s, e in slots[:20]],
         "note": " ".join(notes),
     }
@@ -253,9 +283,21 @@ def find_free_time(days_ahead: int = 7, duration_minutes: int = 60, earliest: st
 
 @tool("시간표 보기")
 def get_timetable() -> dict:
-    """등록된 수업 시간표를 봅니다."""
+    """등록된 수업 시간표를 봅니다. 앞으로 2주 안의 휴일(수업 없는 날)과 시험기간도 함께 알려줍니다."""
     rows = get()
     if not rows:
-        return {"classes": [], "note": "시간표가 없어요. 설정 > 시간표에서 사진으로 등록할 수 있어요."}
-    return {"classes": [f"{DAYS[c['day']]} {c['start']}~{c['end']} {c['title']} {c['place']}".strip()
-                        + (f" · {c['prof']} 교수" if c.get("prof") else "") for c in rows]}
+        return {"classes": [], "note": "시간표가 없어요. 화면 왼쪽 「시간표」에서 포털 PDF나 사진으로 등록할 수 있어요."}
+    out = {"classes": [f"{DAYS[c['day']]} {c['start']}~{c['end']} {c['title']} {c['place']}".strip()
+                       + (f" · {c['prof']} 교수" if c.get("prof") else "") for c in rows]}
+    today = datetime.now(KST).date()
+    special = []
+    for i in range(14):
+        d = today + timedelta(days=i)
+        info = _day_info(d)
+        if info["holiday"] and d.weekday() < 5:
+            special.append(f"{d.month}/{d.day}({DAYS[d.weekday()]}) {info['holiday']} — 수업 없음")
+        elif info["exam"] and d.weekday() < 5:
+            special.append(f"{d.month}/{d.day}({DAYS[d.weekday()]}) {info['exam']} 기간")
+    if special:
+        out["upcoming_exceptions"] = special
+    return out

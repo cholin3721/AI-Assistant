@@ -12,7 +12,8 @@ def config_team_share() -> bool:
 
 
 def add(kind: str, title: str, body: str, link: str = "", push: bool = True) -> dict:
-    """kind: briefing | weekly | reminder | schedule | system"""
+    """kind: briefing | weekly | reminder | overdue | schedule | notice | system
+    팀 채널에도 보내는 것은 reminder·schedule·notice 뿐 (overdue는 내 할 일이라 나에게만)."""
     n = {"id": uuid.uuid4().hex[:10], "kind": kind, "title": title, "body": body,
          "link": link, "created": time.time(), "read": False}
 

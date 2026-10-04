@@ -1,5 +1,6 @@
 """AI 비서 로컬 서버. 실행: python -m app.main  → 브라우저에서 http://127.0.0.1:8765"""
 import json
+import logging
 import queue
 import re
 import sys
@@ -14,9 +15,11 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (agent, chats, config, discord_bot, forms, google_auth, memory, notify, schedule_finder, scheduler,
+from . import (agent, chats, config, discord_bot, forms, google_auth, ics, memory, notify, schedule_finder, scheduler,
                stats, telegram_bot, timetable, todos)
 from .tools import ToolError
+
+log = logging.getLogger("inha")
 
 
 @asynccontextmanager
@@ -183,12 +186,35 @@ def models():
         raise HTTPException(400, agent.friendly_error(e))
 
 
+def _clean_automation(raw: dict) -> dict:
+    """자동 알림 설정 검증. 잘못된 시각·요일이 저장되면 스케줄러가 매분 오류로 멈추므로 여기서 걸러냅니다."""
+    defaults, out = config.DEFAULTS["automation"], {}
+    for k, v in raw.items():
+        if k not in defaults:
+            continue
+        if isinstance(defaults[k], bool):
+            if not isinstance(v, bool):
+                raise HTTPException(400, f"{k} 값은 켜기/끄기(true/false)여야 해요.")
+            out[k] = v
+        elif k == "weekly_day":
+            if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 6:
+                raise HTTPException(400, "요일은 0(월)~6(일) 사이 숫자여야 해요.")
+            out[k] = v
+        else:   # briefing_time, weekly_time
+            m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(v).strip())
+            if not m or not (0 <= int(m.group(1)) <= 23 and 0 <= int(m.group(2)) <= 59):
+                raise HTTPException(400, "시각은 08:00 처럼 00:00~23:59 사이로 입력해주세요.")
+            out[k] = f"{int(m.group(1)):02d}:{m.group(2)}"
+    return out
+
+
 @app.post("/api/settings")
 def settings(body: SettingsIn):
     upd = {k: v for k, v in body.model_dump().items() if v is not None}
     if "automation" in upd:
-        allowed = set(config.DEFAULTS["automation"])
-        upd["automation"] = {k: v for k, v in upd["automation"].items() if k in allowed}
+        upd["automation"] = _clean_automation(upd["automation"])
+    if "model" in upd:
+        upd["model"] = str(upd["model"]).strip()[:80]
     if "notice_keywords" in upd:
         upd["notice_keywords"] = [str(x).strip()[:40] for x in upd["notice_keywords"] if str(x).strip()][:20]
     if "profile" in upd:
@@ -254,7 +280,7 @@ def chat_stream(body: ChatIn):
         try:
             res = agent.chat(sid, msg[:4000], on_event=on_event)
             q.put({"type": "done", "reply": res["reply"], "tools": res["tools"], "model": res.get("model", ""),
-                   "reset": res.get("reset", False)})
+                   "reset": res.get("reset", False), "stopped": res.get("stopped", False)})
         except agent.AgentError as e:
             q.put({"type": "error", "message": str(e)})
         except Exception as e:
@@ -273,6 +299,12 @@ def chat_stream(body: ChatIn):
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/chat/stop")
+def chat_stop(body: SessionIn):
+    """답변 중지: 다음 글 조각이나 다음 도구 호출에서 멈추고, 그때까지 쓴 내용을 답으로 남깁니다."""
+    return {"ok": True, "running": agent.request_stop(body.session_id)}
 
 
 @app.get("/api/chat/history")
@@ -313,6 +345,8 @@ def automation_status():
 def automation_run(body: JobIn):
     try:
         return {"message": scheduler.run_now(body.job)}
+    except scheduler.JobError as e:
+        raise HTTPException(400, str(e))
     except ValueError:
         raise HTTPException(400, "알 수 없는 작업이에요.")
     except Exception as e:
@@ -512,6 +546,21 @@ def todo_add(body: TodoIn):
         raise _bad(e)
 
 
+def _ics_response(text: str, filename: str) -> Response:
+    return Response(text, media_type="text/calendar; charset=utf-8",
+                    headers={"Content-Disposition": f"attachment; filename=\"calendar.ics\"; "
+                                                    f"filename*=UTF-8''{quote(filename)}"})
+
+
+@app.get("/api/todos/ics")
+def todo_ics():
+    """마감일이 있는 남은 할 일을 캘린더 파일로."""
+    items = [x for x in todos.items() if x.get("due")]
+    if not items:
+        raise HTTPException(400, "마감일이 있는 할 일이 없어요.")
+    return _ics_response(ics.todos_ics(items), "할 일 마감.ics")
+
+
 @app.post("/api/todos/{tid}/toggle")
 def todo_toggle(tid: str):
     cur = next((x for x in todos.items(True) if x["id"] == tid), None)
@@ -554,6 +603,24 @@ def timetable_get():
 @app.put("/api/timetable")
 def timetable_put(body: TimetableIn):
     return {"classes": timetable.replace(body.classes)}
+
+
+@app.get("/api/timetable/ics")
+def timetable_ics():
+    """시간표를 매주 반복 일정으로 (개강~종강, 휴일 제외). 학기 기간을 모르면 이번 주부터 16주."""
+    from datetime import datetime
+    from .tools import academic
+    rows = timetable.get()
+    if not rows:
+        raise HTTPException(400, "등록된 수업이 없어요.")
+    today = datetime.now(timetable.KST).date()
+    try:
+        academic.fetch()
+    except Exception:
+        pass   # 못 받아도 저장해 둔 학사일정이나 기본 기간으로 계속
+    start, end = academic.semester_range(today) or ics.default_range(today)
+    holidays = academic.no_class_days(start, end)
+    return _ics_response(ics.timetable_ics(rows, start, end, holidays), "수업 시간표.ics")
 
 
 @app.post("/api/timetable/extract")
@@ -622,11 +689,54 @@ def schedule_ignore(cid: str):
         raise HTTPException(400, str(e))
 
 
+def _setup_logging():
+    """data/app.log 에 동작 기록(오류·자동 작업 결과)만 남깁니다. 메일·대화 내용은 적지 않습니다."""
+    from logging.handlers import RotatingFileHandler
+    try:
+        h = RotatingFileHandler(config.DATA_DIR / "app.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+    except OSError:
+        return
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S"))
+    log.setLevel(logging.INFO)
+    if not log.handlers:
+        log.addHandler(h)
+
+
+def _already_running(url: str) -> str:
+    """같은 포트에 이미 떠 있는 것이 있는지. 'mine'(이 비서) | 'other'(다른 프로그램) | ''(비어 있음)."""
+    import socket
+    import urllib.request
+    try:
+        with socket.create_connection((config.HOST, config.PORT), timeout=0.7):
+            pass
+    except OSError:
+        return ""
+    try:   # 내 PC 주소이므로 시스템에 설정된 프록시를 거치지 않고 바로 물어봄
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url + "/api/status", timeout=3) as r:
+            return "mine" if b'"gemini"' in r.read(4096) else "other"
+    except Exception:
+        return "other"
+
+
 def run():
     import uvicorn
     url = f"http://{config.HOST}:{config.PORT}"
+    silent = "--silent" in sys.argv   # PC 시작 시 자동 실행일 때는 브라우저를 열지 않음
+    running = _already_running(url)
+    if running == "mine":   # 두 번 실행하면 오류로 죽는 대신, 켜져 있는 비서 화면을 열어줌
+        print(f"\n  인하 AI 비서가 이미 실행 중이에요 → {url}\n")
+        if not silent:
+            webbrowser.open(url)
+        return
+    if running == "other":
+        print(f"\n  [!] {config.PORT}번 포트를 다른 프로그램이 쓰고 있어 실행할 수 없어요.\n"
+              f"      그 프로그램을 끄고 다시 실행해주세요.\n")
+        sys.exit(1)
+    _setup_logging()
+    log.info("시작 (python %s)", sys.version.split()[0])
     print(f"\n  인하 AI 비서가 실행됐어요 → {url}\n  (이 창을 닫으면 비서도 꺼집니다)\n")
-    if "--silent" not in sys.argv:   # PC 시작 시 자동 실행일 때는 브라우저를 열지 않음
+    if not silent:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="warning")
 

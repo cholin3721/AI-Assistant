@@ -4,9 +4,12 @@
 import os
 import struct
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
+# 테스트는 실제 data/ 폴더(내 키·기록)를 건드리지 않도록 임시 폴더를 씁니다. app 을 import 하기 전에 정해야 합니다.
+os.environ.setdefault("INHA_AI_DATA_DIR", tempfile.mkdtemp(prefix="inha-ai-test-"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 KST = timezone(timedelta(hours=9))

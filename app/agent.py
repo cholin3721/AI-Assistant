@@ -11,7 +11,7 @@ from .followups import find_awaiting_replies, find_unanswered_emails
 from .memory import forget, remember
 from .timetable import find_free_time, get_timetable
 from .todos import add_todo, complete_todo, list_todos
-from .tools import emit, get_log, start_log
+from .tools import emit, end_log, get_log, start_log
 from .tools.academic import get_academic_calendar
 from .tools.drive import read_drive_file, search_drive_files
 from .tools.gcalendar import create_calendar_event, list_calendar_events
@@ -37,7 +37,9 @@ MESSENGER_TOOLS = [read_team_chat]
 MAX_TURNS = 20   # 대화가 너무 길어지면 새 세션으로 (토큰 절약)
 
 _sessions: dict = {}
-_lock = threading.Lock()
+_lock = threading.Lock()     # _sessions 사전만 보호 (네트워크 호출 중에는 잡지 않음)
+_active: set = set()         # 지금 답을 만들고 있는 세션 id
+_stop: set = set()           # 그중 「중지」를 누른 세션 id
 
 
 class AgentError(Exception):
@@ -251,17 +253,67 @@ def _summarize(sess) -> str:
         return ""
 
 
-def _collect_stream(chat_obj, message: str, on_event) -> str:
+def request_stop(session_id: str) -> bool:
+    """화면의 「중지」 버튼. 지금 답을 만들고 있는 세션이면 다음 조각·다음 도구 호출에서 멈춥니다."""
+    running = session_id in _active
+    if running:
+        _stop.add(session_id)
+    return running
+
+
+def _stopped(session_id: str) -> bool:
+    return session_id in _stop
+
+
+def _collect_stream(chat_obj, message: str, on_event, should_stop=None) -> tuple:
+    """(답변 글자, 중간에 멈췄는지)."""
     text = ""
     if on_event and hasattr(chat_obj, "send_message_stream"):
-        for chunk in chat_obj.send_message_stream(message, config=_config()):
-            piece = getattr(chunk, "text", None) or ""
-            if piece:
-                text += piece
-                on_event({"type": "delta", "text": piece})
-        return text
+        stream = chat_obj.send_message_stream(message, config=_config())
+        try:
+            for chunk in stream:
+                if should_stop and should_stop():
+                    return text, True
+                piece = getattr(chunk, "text", None) or ""
+                if piece:
+                    text += piece
+                    on_event({"type": "delta", "text": piece})
+        finally:
+            close = getattr(stream, "close", None)
+            if close:
+                try:
+                    close()
+                except Exception:
+                    pass
+        return text, bool(should_stop and should_stop())
     resp = chat_obj.send_message(message, config=_config())
-    return resp.text or ""
+    return resp.text or "", False
+
+
+def _session_for(session_id: str, cfg: dict, model: str) -> tuple:
+    """(세션, 넘겨받은 요약). 새 세션을 만들 때 걸리는 네트워크 호출(요약·학사일정·토큰 갱신)은
+    전역 락 밖에서 합니다 — 한 대화가 느려도 웹·디스코드·텔레그램의 다른 대화가 멈추지 않게."""
+    def is_stale(x):
+        return (x is None or x["key"] != cfg["gemini_api_key"] or x["model"] != model
+                or x["turns"] >= MAX_TURNS)
+
+    with _lock:
+        sess = _sessions.get(session_id)
+    if not is_stale(sess):
+        return sess, ""
+    carried, history = "", None
+    if sess is not None and sess["turns"] >= MAX_TURNS:
+        with sess["lock"]:                       # 답을 쓰는 중인 기록을 읽지 않도록
+            carried = _summarize(sess)           # 길어진 대화는 요약만 넘김
+    else:
+        history = _saved_history(session_id)     # 재실행·키 변경 뒤에는 저장된 대화를 이어받음
+    fresh = _new_session(cfg, model, history)
+    with _lock:
+        cur = _sessions.get(session_id)
+        if cur is sess or is_stale(cur):
+            _sessions[session_id] = fresh
+            return fresh, carried
+    return cur, ""                               # 그 사이 다른 요청이 먼저 새 세션을 만들었음
 
 
 def chat(session_id: str, message: str, on_event=None) -> dict:
@@ -269,42 +321,49 @@ def chat(session_id: str, message: str, on_event=None) -> dict:
     if not cfg.get("gemini_api_key"):
         raise AgentError("먼저 설정에서 Gemini API 키를 입력해주세요.")
     model = cfg.get("model") or PREFERRED_MODELS[0]
-    carried = ""
-    with _lock:
-        sess = _sessions.get(session_id)
-        stale = (sess is None or sess["key"] != cfg["gemini_api_key"] or sess["model"] != model
-                 or sess["turns"] >= MAX_TURNS)
-        if stale:
-            history = None
-            if sess is not None and sess["turns"] >= MAX_TURNS:
-                carried = _summarize(sess)       # 길어진 대화는 요약만 넘김
-            else:
-                history = _saved_history(session_id)   # 재실행·키 변경 뒤에는 저장된 대화를 이어받음
-            sess = _new_session(cfg, model, history)
-            _sessions[session_id] = sess
-    with sess["lock"]:
-        start_log(on_event)
-        emit({"type": "status", "text": "생각 중…"})
-        outgoing = message
-        if carried:
-            outgoing = f"[이전 대화 요약]\n{carried}\n\n[이어서]\n{message}"
-            emit({"type": "status", "text": "대화가 길어져 요약을 남기고 새로 시작해요"})
+    is_task = session_id.startswith("task-")
+    stopped, text, tools, carried = False, "", [], ""
+    _active.add(session_id)
+    try:
         try:
-            text = _collect_stream(sess["chat"], outgoing, on_event)
+            sess, carried = _session_for(session_id, cfg, model)
         except Exception as e:
             raise AgentError(friendly_error(e))
-        sess["turns"] += 1
+        with sess["lock"]:
+            # 자동 브리핑·회고(task)는 알림 횟수로 따로 세므로 그 안의 도구는 리포트에 다시 세지 않음
+            start_log(on_event, count_stats=not is_task, should_stop=lambda: _stopped(session_id))
+            try:
+                emit({"type": "status", "text": "생각 중…"})
+                outgoing = message
+                if carried:
+                    outgoing = f"[이전 대화 요약]\n{carried}\n\n[이어서]\n{message}"
+                    emit({"type": "status", "text": "대화가 길어져 요약을 남기고 새로 시작해요"})
+                try:
+                    text, stopped = _collect_stream(sess["chat"], outgoing, on_event, lambda: _stopped(session_id))
+                except Exception as e:
+                    if not _stopped(session_id):
+                        raise AgentError(friendly_error(e))
+                    text, stopped = "", True
+                sess["turns"] += 1
+                tools = get_log()
+            finally:
+                end_log()
+    finally:
+        _active.discard(session_id)
+        _stop.discard(session_id)
     from . import chats, stats
-    channel = "task" if session_id.startswith("task-") else session_id if session_id in ("discord", "telegram") else "web"
+    channel = "task" if is_task else session_id if session_id in ("discord", "telegram") else "web"
     stats.record(f"chat:{channel}")
-    if not (text or "").strip():
+    if stopped:
+        text = ((text or "").rstrip() + "\n\n_(여기서 중지했어요)_").strip()
+        reset(session_id)   # 끊긴 답은 AI 쪽 기록에 남지 않으므로, 다음 질문 때 저장된 대화로 다시 이어받음
+    elif not (text or "").strip():
         text = "응답을 만들지 못했어요. 질문을 조금 바꿔서 다시 해볼래요?"
     if carried:
         text = "_대화가 길어져 요약을 남기고 새로 시작했어요._\n\n" + text
-    tools = get_log()
     chats.append(session_id, "user", message)
     chats.append(session_id, "bot", text, tools)
-    return {"reply": text, "tools": tools, "model": model, "reset": bool(carried)}
+    return {"reply": text, "tools": tools, "model": model, "reset": bool(carried), "stopped": stopped}
 
 
 def run_task(prompt: str) -> str:

@@ -357,3 +357,6 @@ label.btn-sm.busy{opacity:.6;pointer-events:none}
 .quick.more{border-style:dashed;opacity:.85}
 .connect-card{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;padding:12px 14px;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);background:var(--accent-weak);border-radius:10px;font-size:14px}
 .connect-card span{color:var(--muted);font-size:13px}
+/* 답변 중지 버튼 · 줄 정렬 */
+.composer button.stop{background:transparent;color:var(--text);border:1px solid var(--line)}
+.row.between{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}

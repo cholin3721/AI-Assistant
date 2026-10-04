@@ -1,6 +1,8 @@
 """구글 계정 연동 (OAuth). 사용자의 PC에서 브라우저 로그인 → 토큰을 data/token.json에 저장."""
 import json
+import logging
 import threading
+import time
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
@@ -18,8 +20,21 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
 ]
 
-_state = {"running": False, "error": ""}
+_state = {"running": False, "error": "", "offline": False, "retry_at": 0.0}
 _creds_cache = {"creds": None}
+_lock = threading.RLock()
+log = logging.getLogger("inha")
+RETRY_SEC = 60          # 갱신에 실패하면 이 시간 동안은 다시 시도하지 않음 (화면이 매번 기다리지 않게)
+REFRESH_TIMEOUT = 10    # 토큰 갱신 요청 제한 시간(초). 기본값 120초는 화면이 멈춘 것처럼 보임
+EXPIRED_MSG = "구글 로그인이 만료됐어요(테스트 모드 앱은 7일마다 만료). '구글 로그인'을 다시 눌러주세요."
+OFFLINE_MSG = "인터넷 연결이 불안정해 구글에 접속하지 못했어요. 연결되면 자동으로 다시 이어져요."
+
+
+class _QuickRequest(Request):
+    """토큰 갱신용 요청: 제한 시간을 짧게."""
+    def __call__(self, url, method="GET", body=None, headers=None, timeout=REFRESH_TIMEOUT, **kwargs):
+        return super().__call__(url, method=method, body=body, headers=headers,
+                                timeout=min(timeout or REFRESH_TIMEOUT, REFRESH_TIMEOUT), **kwargs)
 
 
 def validate_client_file(raw: bytes) -> str:
@@ -38,30 +53,73 @@ def validate_client_file(raw: bytes) -> str:
     return ""
 
 
+def _needs_relogin(e: Exception) -> bool:
+    """갱신 실패가 '다시 로그인해야 하는' 종류인지 (만료·취소·클라이언트 삭제)."""
+    msg = str(e).lower()
+    return any(x in msg for x in ("invalid_grant", "invalid_client", "unauthorized_client", "deleted_client",
+                                  "expired or revoked", "account has been deleted"))
+
+
 def get_credentials():
-    """유효한 구글 자격 증명을 반환. 없거나 만료돼 갱신 실패하면 None."""
-    creds = _creds_cache["creds"]
-    if creds is None and config.TOKEN_PATH.exists():
-        try:
-            creds = Credentials.from_authorized_user_file(str(config.TOKEN_PATH), SCOPES)
-        except Exception:
-            creds = None
-    if creds is None:
-        return None
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
+    """유효한 구글 자격 증명을 반환. 없거나, 만료돼 다시 로그인해야 하거나, 지금 인터넷이 안 되면 None.
+    어떤 경우에도 예외를 던지지 않습니다 (화면 상태 조회·스케줄러가 이 함수 때문에 멈추지 않게)."""
+    expired = False
+    with _lock:
+        creds = _creds_cache["creds"]
+        if creds is None and config.TOKEN_PATH.exists():
             try:
-                creds.refresh(Request())
-                config.TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
-            except RefreshError:
+                creds = Credentials.from_authorized_user_file(str(config.TOKEN_PATH), SCOPES)
+            except Exception:
+                creds = None
+        if creds is None:
+            return None
+        if creds.valid:
+            _creds_cache["creds"] = creds
+            return creds
+        if not (creds.expired and creds.refresh_token):
+            return None
+        if time.time() < _state["retry_at"]:
+            return None
+        try:
+            creds.refresh(_QuickRequest())
+        except Exception as e:
+            if isinstance(e, RefreshError) and _needs_relogin(e):
                 # 테스트 모드 앱은 7일마다 토큰이 만료됨 → 다시 로그인 필요
                 disconnect(keep_client=True)
-                _state["error"] = "구글 로그인이 만료됐어요(테스트 모드 앱은 7일마다 만료). '구글 로그인'을 다시 눌러주세요."
+                _state.update(error=EXPIRED_MSG, offline=False, retry_at=0.0)
+                expired = True
+                log.warning("구글 로그인 만료: %s", str(e)[:200])
+            else:
+                # 와이파이 끊김·구글 일시 오류: 토큰은 그대로 두고 잠시 뒤 다시 시도
+                _creds_cache["creds"] = creds
+                _state.update(error=OFFLINE_MSG, offline=True, retry_at=time.time() + RETRY_SEC)
+                log.warning("구글 토큰 갱신 실패(일시적): %s: %s", type(e).__name__, str(e)[:200])
                 return None
         else:
-            return None
-    _creds_cache["creds"] = creds
-    return creds
+            try:
+                config.write_atomic(config.TOKEN_PATH, creds.to_json())
+            except OSError:
+                pass
+            if _state["offline"]:
+                _state.update(error="", offline=False)
+            _state["retry_at"] = 0.0
+            _creds_cache["creds"] = creds
+            return creds
+    if expired:
+        _notify_expired()
+    return None
+
+
+def _notify_expired():
+    """만료를 사용자에게 한 번 알림 — 알려주지 않으면 메일 일정 찾기가 조용히 멈춘 채로 남음."""
+    try:
+        from . import notify
+        notify.add("system", "구글 로그인이 만료됐어요",
+                   "메일·캘린더·드라이브 기능이 잠시 멈췄어요. 화면 왼쪽 아래 **설정 > 구글**에서 "
+                   "「구글 로그인」을 한 번만 다시 눌러주세요.\n\n"
+                   "(테스트 모드 앱은 7일마다 만료돼요. 구글 클라우드에서 앱을 '프로덕션'으로 바꾸면 사라져요.)")
+    except Exception:
+        pass
 
 
 def status() -> dict:
@@ -73,6 +131,7 @@ def status() -> dict:
         "email": email,
         "login_in_progress": _state["running"],
         "error": _state["error"],
+        "offline": bool(_state["offline"] and creds is None),   # 로그인은 돼 있는데 지금 접속만 안 되는 상태
     }
 
 
@@ -184,10 +243,10 @@ def _run_flow():
             success_message="연동 완료! 이 창을 닫고 AI 비서 화면으로 돌아가세요.",  # 꾸민 화면을 못 쓸 때의 대체 문구
             timeout_seconds=300,
         )
-        config.TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+        config.write_atomic(config.TOKEN_PATH, creds.to_json())
         _creds_cache["creds"] = creds
         config.save({"google_email": _fetch_email(creds)})
-        _state["error"] = ""
+        _state.update(error="", offline=False, retry_at=0.0)
     except Exception as e:  # 사용자가 창을 닫거나 시간 초과 등
         msg = str(e)
         if "access_denied" in msg or "403" in msg:
@@ -213,6 +272,7 @@ def start_login() -> dict:
 
 def disconnect(keep_client: bool = True):
     _creds_cache["creds"] = None
+    _state.update(offline=False, retry_at=0.0)
     if config.TOKEN_PATH.exists():
         config.TOKEN_PATH.unlink()
     if not keep_client and config.CREDENTIALS_PATH.exists():

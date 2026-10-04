@@ -21,7 +21,7 @@ MINUTES = {
     "tool:search_drive_files": 1, "tool:read_drive_file": 3,
     "tool:get_school_notices": 3, "tool:read_school_notice": 2, "tool:read_notice_attachment": 5,
     "tool:find_events_in_emails": 5, "tool:find_events_in_notices": 10, "tool:get_academic_calendar": 2,
-    "notify:briefing": 10, "notify:weekly": 15, "notify:reminder": 2,
+    "notify:briefing": 10, "notify:weekly": 15, "notify:reminder": 2, "notify:overdue": 2,
     "tool:read_team_chat": 10,
     "candidate_added": 2, "candidate_todo": 2, "form_draft": 30, "form_rewrite": 2,
 }
@@ -121,7 +121,7 @@ def summary(period_days: int = 30, now: datetime | None = None) -> dict:
         "kpi": {
             "chats": g("chat:"),
             "chats_by_channel": {k[5:]: v for k, v in t.items() if k.startswith("chat:")},
-            "reminders": t.get("notify:reminder", 0),
+            "reminders": t.get("notify:reminder", 0) + t.get("notify:overdue", 0),
             "briefings": t.get("notify:briefing", 0) + t.get("notify:weekly", 0),
             "candidates_found": g("candidate_found"),
             "candidates_added": t.get("candidate_added", 0),

@@ -1,4 +1,5 @@
 """할 일 목록 (내 PC에 저장). 공지 체크리스트·메일에서 나온 할 일을 모아둡니다."""
+import re
 import time
 import uuid
 from datetime import datetime
@@ -27,12 +28,18 @@ def _valid_due(due: str) -> str:
     return due
 
 
+def _safe_link(link: str) -> str:
+    """화면에서 눌러 여는 주소라 http(s)만 받습니다 (AI가 넣어주는 값이라 javascript: 같은 주소는 버림)."""
+    link = (link or "").strip()[:500]
+    return link if re.match(r"https?://[^\s]+$", link, re.I) else ""
+
+
 def add(title: str, due: str = "", note: str = "", link: str = "") -> dict:
-    title = " ".join(title.split())[:120]
+    title = " ".join((title or "").split())[:120]
     if not title:
         raise ToolError("할 일 내용이 비어 있어요.")
-    item = {"id": uuid.uuid4().hex[:8], "title": title, "due": _valid_due(due), "note": note[:300],
-            "link": link, "done": False, "created": time.time()}
+    item = {"id": uuid.uuid4().hex[:8], "title": title, "due": _valid_due(due), "note": (note or "")[:300],
+            "link": _safe_link(link), "done": False, "created": time.time()}
 
     def fn(d):
         for x in d["items"]:

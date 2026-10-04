@@ -4,17 +4,17 @@
 봇에 /start <코드> 전송 → 그 대화(chat_id)만 '주인'으로 등록. 다른 사람이 보낸 메시지는 무시합니다.
 """
 import html
-import random
 import re
 import threading
 import time
 
 import requests
 
-from . import config
+from . import config, linkcode
 
 API = "https://api.telegram.org/bot{token}/{method}"
 _state = {"gen": 0, "error": "", "last_ok": 0.0}
+_attempts = linkcode.Attempts()
 
 
 class TelegramError(Exception):
@@ -47,7 +47,7 @@ def setup_token(token: str) -> dict:
     if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{20,}", token):
         raise TelegramError("토큰 형식이 아니에요. '123456789:AA…' 처럼 생긴 전체 토큰을 붙여넣어 주세요.")
     me = _call(token, "getMe")
-    code = f"{random.randint(0, 999999):06d}"
+    code = linkcode.new_code()
     config.save({"telegram": {"token": token, "bot_username": me.get("username", ""),
                               "chat_id": None, "link_code": code, "owner_name": ""}})
     restart()
@@ -146,6 +146,22 @@ def _reply_with_agent(chat_id, text):
         _state["error"] = str(e)
 
 
+def link_step(t: dict, chat_id, text: str, name: str = "") -> str:
+    """아직 주인이 없을 때 온 메시지 처리 → 'linked' 또는 보낼 안내 문구. (순수 로직 — 테스트 가능)"""
+    code = t.get("link_code")
+    payload = re.sub(r"^/start(@\w+)?", "", text or "").strip()   # "/start 123456" 또는 "123456"
+    verdict = _attempts.check(code, payload) if code else "none"
+    if verdict == "ok":
+        config.save({"telegram": {**t, "chat_id": chat_id, "link_code": "", "owner_name": name}})
+        return "linked"
+    if verdict == "rotate":   # 여러 번 틀림 → 코드를 바꿔 무작위 대입을 막음
+        config.save({"telegram": {**t, "link_code": linkcode.new_code()}})
+        return "코드가 여러 번 틀려서 새 코드로 바꿨어요. AI 비서 화면의 「텔레그램에서 연결하기」 버튼을 다시 눌러주세요."
+    if verdict == "wrong":
+        return "코드가 맞지 않아요. AI 비서 화면의 「텔레그램에서 연결하기」 버튼으로 시작해주세요."
+    return "AI 비서 화면의 「텔레그램에서 연결하기」 버튼으로 시작해주세요."
+
+
 def _handle(msg: dict):
     t = _cfg()
     chat_id = msg.get("chat", {}).get("id")
@@ -156,14 +172,11 @@ def _handle(msg: dict):
     owner = t.get("chat_id")
 
     if not owner:  # 아직 주인 없음 → 연결 코드 확인
-        code = t.get("link_code")
-        if code and text.startswith("/start") and code in text:
-            name = msg.get("from", {}).get("first_name", "")
-            config.save({"telegram": {**t, "chat_id": chat_id, "link_code": "", "owner_name": name}})
+        reply = link_step(t, chat_id, text, msg.get("from", {}).get("first_name", ""))
+        if reply == "linked":
             send("연결됐어요! 이제 여기서 알림을 받고, 비서에게 바로 말 걸 수 있어요.\n\n" + HELP, chat_id)
         else:
-            _call(token, "sendMessage", chat_id=chat_id,
-                  text="AI 비서 화면의 「텔레그램에서 연결하기」 버튼으로 시작해주세요.")
+            _call(token, "sendMessage", chat_id=chat_id, text=reply)
         return
 
     if chat_id != owner:

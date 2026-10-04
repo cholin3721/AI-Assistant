@@ -1,7 +1,9 @@
 """설정 저장소 — 모든 키와 토큰은 이 PC의 data/ 폴더에만 저장됩니다."""
 import json
+import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 if getattr(sys, "frozen", False):   # PyInstaller로 만든 exe: data/는 exe 옆, 화면 파일은 번들 안
@@ -10,8 +12,9 @@ if getattr(sys, "frozen", False):   # PyInstaller로 만든 exe: data/는 exe �
 else:
     BASE_DIR = Path(__file__).resolve().parent.parent
     BUNDLE_DIR = BASE_DIR
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# 테스트·여러 계정용: INHA_AI_DATA_DIR 로 저장 위치를 바꿀 수 있음 (기본은 프로그램 폴더의 data/)
+DATA_DIR = Path(os.environ.get("INHA_AI_DATA_DIR") or BASE_DIR / "data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIG_PATH = DATA_DIR / "config.json"
 CREDENTIALS_PATH = DATA_DIR / "credentials.json"   # 구글 OAuth 클라이언트 (사용자가 업로드)
@@ -32,7 +35,7 @@ DEFAULTS = {
     "automation": {
         "briefing": True, "briefing_time": "08:00",          # 아침 브리핑
         "weekly": True, "weekly_day": 4, "weekly_time": "18:00",  # 주간 회고 (0=월 … 4=금)
-        "reminders": True,                                     # 마감 D-3·D-1·당일 알림
+        "reminders": True,                                     # 마감 D-3·D-1·당일 알림 + 지난 마감
         "notice_scan": True,                                   # 학교 공지에서 일정 후보 찾기
         "desktop_toast": True,                                 # 윈도우 알림(토스트)
         "team_share": True,                                    # 마감 알림·일정 후보를 팀 채널에도
@@ -40,17 +43,31 @@ DEFAULTS = {
     "notice_keywords": [],   # 새 공지 제목에 이 단어가 있으면 바로 알림 (예: ["장학", "AI", "공모전"])
 }
 
-_lock = threading.Lock()
+_lock = threading.RLock()
+
+
+def write_atomic(path: Path, text: str):
+    """임시 파일에 다 쓴 뒤 바꿔치기 — 쓰는 도중 꺼져도 원래 파일이 깨지지 않습니다."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def load() -> dict:
     with _lock:
-        if not CONFIG_PATH.exists():
-            return json.loads(json.dumps(DEFAULTS))
-        try:
-            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            data = {}
+        data = {}
+        if CONFIG_PATH.exists():
+            try:
+                data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("config root")
+            except (ValueError, OSError):
+                # 깨진 설정은 덮어쓰기 전에 따로 남겨 둠 (키를 되살릴 수 있게)
+                try:
+                    os.replace(CONFIG_PATH, CONFIG_PATH.with_name(f"config.broken-{int(time.time())}.json"))
+                except OSError:
+                    pass
+                data = {}
     merged = json.loads(json.dumps(DEFAULTS))
     for k, v in data.items():
         if isinstance(merged.get(k), dict) and isinstance(v, dict):
@@ -61,14 +78,14 @@ def load() -> dict:
 
 
 def save(updates: dict) -> dict:
-    cfg = load()
-    for k, v in updates.items():
-        if k in ("profile", "automation") and isinstance(v, dict):
-            cfg[k].update(v)
-        else:
-            cfg[k] = v
-    with _lock:
-        CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _lock:   # 읽기-고치기-쓰기를 한 덩어리로: 동시에 저장해도 서로 덮어쓰지 않음
+        cfg = load()
+        for k, v in updates.items():
+            if k in ("profile", "automation") and isinstance(v, dict):
+                cfg[k].update(v)
+            else:
+                cfg[k] = v
+        write_atomic(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2))
     return cfg
 
 

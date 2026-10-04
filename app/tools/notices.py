@@ -2,7 +2,7 @@
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -22,6 +22,26 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) InhaAIAssist
 CACHE_SEC = 600
 _cache: dict = {}
 DATE_RE = re.compile(r"(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})")
+SCHOOL_DOMAIN = "inhatc.ac.kr"
+
+
+def is_school_url(url: str) -> bool:
+    """인하공전 홈페이지 주소인지 '호스트 이름'으로 확인합니다.
+    글자 앞부분만 비교하면 https://www.inhatc.ac.kr.evil.com 이나 https://www.inhatc.ac.kr@evil.com 이 통과해 버립니다."""
+    try:
+        u = urlparse((url or "").strip())
+        host = (u.hostname or "").lower()
+        port = u.port
+    except ValueError:
+        return False
+    return (u.scheme == "https" and not u.username and port in (None, 443)
+            and (host == SCHOOL_DOMAIN or host.endswith("." + SCHOOL_DOMAIN)))
+
+
+def _check_final(r):
+    """리다이렉트로 학교 밖 주소에 도착했다면 내용을 쓰지 않습니다."""
+    if not is_school_url(r.url):
+        raise ToolError("학교 홈페이지 밖으로 연결되는 주소라 읽지 않았어요.")
 
 
 def _get(url: str, params=None) -> str:
@@ -31,6 +51,10 @@ def _get(url: str, params=None) -> str:
         return hit[1]
     r = requests.get(url, params=params, headers=HEADERS, timeout=10)
     r.raise_for_status()
+    _check_final(r)
+    if len(_cache) > 200:   # 오래 켜 두어도 캐시가 끝없이 커지지 않게
+        for k in sorted(_cache, key=lambda k: _cache[k][0])[:100]:
+            _cache.pop(k, None)
     r.encoding = r.apparent_encoding if not r.encoding or r.encoding.lower() == "iso-8859-1" else r.encoding
     _cache[key] = (time.time(), r.text)
     return r.text
@@ -108,17 +132,21 @@ def read_school_notice(url: str) -> dict:
     Args:
         url: get_school_notices 결과의 url.
     """
-    if not url.startswith(SITE):
+    url = (url or "").strip()
+    if not is_school_url(url):
         raise ToolError("인하공전 홈페이지 공지 주소만 읽을 수 있어요.")
     soup = BeautifulSoup(_get(url), "html.parser")
     title_el = soup.select_one(".artclViewTitle, .view-title, h2.artclViewTitle, .bbs-title")
     body_el = (soup.select_one(".artclView") or soup.select_one(".view-con")
                or soup.select_one(".artclViewContents") or soup.select_one("article") or soup.body)
+    if body_el is None:
+        raise ToolError("공지 내용을 찾지 못했어요. 주소가 맞는지 확인해주세요.")
     for bad in body_el.select("script, style"):
         bad.decompose()
     text = re.sub(r"\n{3,}", "\n\n", body_el.get_text("\n", strip=True))
     files = [{"name": a.get_text(strip=True), "url": urljoin(SITE, a.get("href", ""))}
              for a in soup.select('a[href*="download.do"]') if a.get_text(strip=True)]
+    files = [f for f in files if is_school_url(f["url"])]
     return {
         "title": title_el.get_text(" ", strip=True) if title_el else "",
         "url": url,
@@ -157,10 +185,12 @@ def read_notice_attachment(url: str) -> dict:
 
 def download_attachment(url: str) -> tuple:
     """학교 공지 첨부파일을 내려받아 (바이트, 파일 이름)을 돌려줌."""
-    if not url.startswith(SITE):
+    url = (url or "").strip()
+    if not is_school_url(url):
         raise ToolError("인하공전 홈페이지 첨부파일만 읽을 수 있어요.")
     r = requests.get(url, headers=HEADERS, timeout=20, stream=True)
     r.raise_for_status()
+    _check_final(r)
     data = b""
     for chunk in r.iter_content(65536):
         data += chunk

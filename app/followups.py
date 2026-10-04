@@ -1,6 +1,6 @@
 """메일 후속 관리: ① 내가 답장 안 한 메일 ② 내가 보냈는데 답이 없는 메일."""
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 
 from google import genai
 from google.genai import types

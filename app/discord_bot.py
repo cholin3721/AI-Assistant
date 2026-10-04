@@ -4,23 +4,24 @@
   1) 개발자 포털에서 앱 만들기 → Bot 메뉴에서 토큰 복사 → 화면에 붙여넣기
   2) 화면의 「내 서버에 봇 초대하기」로 내 서버에 초대 (디스코드는 같은 서버에 있어야 DM을 주고받을 수 있음)
   3) 봇이 서버 주인에게 인사 DM을 보냄 → 화면에 보이는 6자리 연결 코드를 답장 → 그 사람만 '주인'으로 등록
-DM만 사용하므로 특수 권한(Message Content Intent)을 켤 필요가 없습니다. 주인 외의 메시지에는 응답하지 않습니다.
+기본은 DM만 사용하므로 특수 권한(Message Content Intent)이 필요 없습니다. 「팀 채널 대화 요약」을 켰을 때만 그 권한을 요청합니다.
+주인 외의 메시지에는 응답하지 않습니다.
 """
 import asyncio
-import random
 import re
 import threading
 import time
 
 import requests
 
-from . import config
+from . import config, linkcode
 
 API = "https://discord.com/api/v10"
 LIMIT = 1900   # 디스코드 메시지 최대 2000자
 EMPTY = {"token": "", "bot_username": "", "app_id": "", "owner_id": None, "owner_name": "", "link_code": "",
           "team_channel_id": "", "team_channel_name": "", "read_channel": False}
 _state = {"gen": 0, "error": "", "ready": False, "loop": None, "client": None}
+_attempts = linkcode.Attempts()
 
 HELP = ("인하 AI 비서예요. 여기서 그냥 말 걸면 돼요.\n"
         "예) 오늘 일정 알려줘 / 안 읽은 메일 요약해줘 / 장학금 공지 있어?\n\n"
@@ -66,7 +67,7 @@ def setup_token(token: str) -> dict:
                            "(General Information의 Application ID나 Public Key가 아니에요)")
     app = _rest(token, "/oauth2/applications/@me")
     me = _rest(token, "/users/@me")
-    code = f"{random.randint(0, 999999):06d}"
+    code = linkcode.new_code()
     config.save({"discord": {**EMPTY, "token": token, "bot_username": me.get("username", ""),
                              "app_id": str(app.get("id") or me.get("id") or ""), "link_code": code}})
     restart()
@@ -117,9 +118,15 @@ def handle_dm(author_id, author_name: str, text: str):
 
     if not owner:  # 아직 주인 없음 → 연결 코드 확인
         code = d.get("link_code")
-        if code and code in re.sub(r"\s", "", text):
+        verdict = _attempts.check(code, text) if code else "none"
+        if verdict == "ok":
             config.save({"discord": {**d, "owner_id": str(author_id), "owner_name": author_name, "link_code": ""}})
             return ["연결됐어요! 이제 여기서 알림을 받고, 비서에게 바로 말 걸 수 있어요.\n\n" + HELP], None
+        if verdict == "rotate":   # 여러 번 틀림 → 코드를 바꿔 무작위 대입을 막음
+            config.save({"discord": {**d, "link_code": linkcode.new_code()}})
+            return ["코드가 여러 번 틀려서 새 코드로 바꿨어요. AI 비서 화면(설정 > 메신저)에서 **새 6자리 코드**를 확인해 보내주세요."], None
+        if verdict == "wrong":
+            return ["코드가 맞지 않아요. AI 비서 화면(설정 > 메신저)에 보이는 6자리 숫자만 보내주세요."], None
         return ["AI 비서 화면(설정 > 메신저)에 보이는 **6자리 연결 코드**를 보내주세요."], None
 
     if str(author_id) != str(owner):

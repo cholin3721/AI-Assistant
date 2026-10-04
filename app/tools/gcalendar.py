@@ -6,6 +6,38 @@ KST = timezone(timedelta(hours=9))
 TZ = "Asia/Seoul"
 
 
+def fetch_events(days_ahead: int = 7, days_back: int = 0, keyword: str = "", limit: int = 50) -> dict:
+    """기본 캘린더 일정을 읽습니다 (도구가 아닌 내부용 — 자동 확인이 리포트에 세어지지 않음).
+    limit까지 여러 페이지를 이어 읽습니다. 구글 미연동이면 ToolError."""
+    svc = google_service("calendar", "v3")
+    now = datetime.now(KST)
+    start = (now - timedelta(days=int(days_back))).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = (now + timedelta(days=int(days_ahead))).replace(hour=23, minute=59, second=59, microsecond=0)
+    params = dict(calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(),
+                  singleEvents=True, orderBy="startTime", maxResults=min(250, max(1, int(limit))), timeZone=TZ)
+    if keyword:
+        params["q"] = keyword
+    events, token = [], None
+    for _ in range(10):
+        res = svc.events().list(**params, pageToken=token).execute()
+        for e in res.get("items", []):
+            s, en = e.get("start", {}), e.get("end", {})
+            events.append({
+                "title": e.get("summary", "(제목 없음)"),
+                "start": s.get("dateTime") or s.get("date"),
+                "end": en.get("dateTime") or en.get("date"),
+                "all_day": "date" in s,
+                "location": e.get("location", ""),
+                "link": e.get("htmlLink", ""),
+            })
+        token = res.get("nextPageToken")
+        if not token or len(events) >= limit:
+            break
+    more = bool(token) or len(events) > limit
+    return {"range": f"{start:%Y-%m-%d} ~ {end:%Y-%m-%d}", "count": len(events[:limit]), "events": events[:limit],
+            "more": more}
+
+
 @tool("일정 조회")
 def list_calendar_events(days_ahead: int = 7, days_back: int = 0, keyword: str = "") -> dict:
     """구글 캘린더(기본 캘린더)의 일정을 조회합니다.
@@ -15,27 +47,10 @@ def list_calendar_events(days_ahead: int = 7, days_back: int = 0, keyword: str =
         days_back: 며칠 전부터 볼지 (지난 일정 확인용, 보통 0).
         keyword: 일정 제목/내용 검색어 (없으면 빈 문자열).
     """
-    svc = google_service("calendar", "v3")
-    now = datetime.now(KST)
-    start = (now - timedelta(days=int(days_back))).replace(hour=0, minute=0, second=0, microsecond=0)
-    end = (now + timedelta(days=int(days_ahead))).replace(hour=23, minute=59, second=59, microsecond=0)
-    params = dict(calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(),
-                  singleEvents=True, orderBy="startTime", maxResults=50, timeZone=TZ)
-    if keyword:
-        params["q"] = keyword
-    res = svc.events().list(**params).execute()
-    events = []
-    for e in res.get("items", []):
-        s, en = e.get("start", {}), e.get("end", {})
-        events.append({
-            "title": e.get("summary", "(제목 없음)"),
-            "start": s.get("dateTime") or s.get("date"),
-            "end": en.get("dateTime") or en.get("date"),
-            "all_day": "date" in s,
-            "location": e.get("location", ""),
-            "link": e.get("htmlLink", ""),
-        })
-    return {"range": f"{start:%Y-%m-%d} ~ {end:%Y-%m-%d}", "count": len(events), "events": events}
+    res = fetch_events(days_ahead, days_back, keyword, limit=50)
+    if res.pop("more", False):
+        res["note"] = "일정이 많아 앞의 50개만 가져왔어요. 기간을 줄이거나 keyword로 좁혀보세요."
+    return res
 
 
 @tool("일정 등록")
